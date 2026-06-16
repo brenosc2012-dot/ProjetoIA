@@ -31,6 +31,10 @@ com facilidade — manualmente ou com geração automática de exercícios por I
 - [x] Cadastro/edição/exclusão de exercícios e lições.
 - [x] Visualização do progresso do aluno por disciplina.
 - [x] Geração automática de exercícios por IA (provedor **Groq**, gratuito).
+- [x] **Tela de resumo por IA antes das atividades** (estudo), com barra de leitura e
+      botão liberado após 10s; cache por sessão e fallback para o conteúdo original.
+- [x] **Explicação automática por IA ao errar** uma questão, com tom acolhedor e
+      fallback para mensagem padrão.
 
 ### Conteúdo e técnico
 - [x] Conteúdo de exemplo pré-cadastrado (3 lições por disciplina = 27 lições).

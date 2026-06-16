@@ -251,6 +251,17 @@ label{ display:block; font-weight:700; font-size:14px; margin-bottom:6px; color:
 .ia-spinner{ width:22px; height:22px; border:3px solid #e3d1f5; border-top-color:#9b59b6; border-radius:50%; display:inline-block; animation:spin .8s linear infinite; }
 @keyframes spin{ to{ transform:rotate(360deg); } }
 
+/* Tela de estudo (resumo por IA) */
+.read-track{ height:6px; background:var(--gray); width:100%; }
+.read-fill{ height:100%; width:0; transition:width .1s linear; }
+.resumo-box{ background:#fff; border:2px solid var(--gray); border-radius:16px; padding:16px; font-size:17px; }
+.resumo-topico{ display:flex; align-items:flex-start; gap:10px; background:#fffef6; border-radius:10px; padding:8px 10px; margin:6px 0; line-height:1.5; }
+.resumo-topico .rt-ic{ flex-shrink:0; font-size:18px; }
+
+/* Tela de explicação do erro */
+.explic-resp{ background:#d7ffb8; border:2px solid var(--green); border-radius:12px; padding:12px; text-align:center; margin-bottom:14px; color:var(--green-d); }
+.explic-resp b{ color:var(--green-d); }
+
 /* divisor seção professor */
 .sec-title{ font-size:13px; font-weight:800; color:var(--gray-d); text-transform:uppercase; margin:18px 0 8px; letter-spacing:.5px; }
 
@@ -714,16 +725,21 @@ function verificarMedalhas(ctx){
 /* ============================================================
    D) UI DO ALUNO
    ============================================================ */
-const State = { tela:"home", subj:null, lesson:null };
+const State = { tela:"home", subj:null, lesson:null, estudo:null, explic:null };
 // estado de uma sessão de exercícios
 let Sess = null;
+// cache de resumos gerados por IA nesta sessão: { lessonId: textoResumo }
+let resumoCache = {};
+// timer da contagem regressiva da tela de estudo
+let estudoTimer = null;
 
 function render(){
   switch(State.tela){
     case "home":      renderHome(); break;
     case "lessons":   renderLessons(); break;
-    case "content":   renderContent(); break;
+    case "study":     renderStudy(); break;
     case "exercise":  renderExercise(); break;
+    case "explain":   renderExplain(); break;
     case "done":      renderDone(); break;
     case "profile":   renderProfile(); break;
     case "teacher":   renderTeacher(); break;
@@ -731,7 +747,7 @@ function render(){
   }
 }
 
-function goHome(){ State.tela="home"; render(); }
+function goHome(){ clearInterval(estudoTimer); State.tela="home"; render(); }
 
 // ----- HOME: seleção de disciplinas -----
 function renderHome(){
@@ -779,7 +795,7 @@ function renderHome(){
 }
 
 // ----- LISTA DE LIÇÕES de uma disciplina -----
-function openSubject(id){ State.subj=id; State.tela="lessons"; render(); }
+function openSubject(id){ clearInterval(estudoTimer); State.subj=id; State.tela="lessons"; render(); }
 function renderLessons(){
   const s = subjById(State.subj); const d=PROFILE.disciplinas[s.id];
   const licoes = DATA[s.id]||[];
@@ -811,36 +827,121 @@ function renderLessons(){
   </div>`;
 }
 
-// ----- CONTEÚDO da lição -----
-function openLesson(lid){ State.lesson=lid; State.tela="content"; render(); }
+// ----- TELA DE ESTUDO (resumo gerado por IA, antes das atividades) -----
 function getLesson(){ return (DATA[State.subj]||[]).find(l=>l.id===State.lesson); }
 
-function renderContent(){
+async function openLesson(lid){
+  clearInterval(estudoTimer);
+  State.lesson=lid; State.tela="study";
+  const l=getLesson();
+  if(!l){ goHome(); return; }
+
+  // cache por sessão: se já gerou o resumo desta lição, mostra na hora
+  if(resumoCache[lid]){ State.estudo={ status:"ok", texto:resumoCache[lid] }; render(); return; }
+  // sem chave configurada → usa o conteúdo original do professor
+  if(!IA.apiKey.trim()){ State.estudo={ status:"fallback", texto:l.texto }; render(); return; }
+
+  // chama a IA para gerar o resumo
+  State.estudo={ status:"loading" }; render();
+  const prompt =
+`Você é um professor do 5º ano do Ensino Fundamental (Sistema Positivo).
+Com base no conteúdo abaixo, crie um resumo didático e detalhado para uma criança de 10 anos estudar antes de responder exercícios.
+O resumo deve:
+- Ter linguagem simples, clara e animada
+- Usar exemplos do cotidiano de uma criança
+- Destacar os pontos mais importantes em tópicos
+- Ter no máximo 300 palavras
+- Incluir uma dica de memorização no final
+Conteúdo da lição: ${l.texto}`;
+  try{
+    const texto = await chamarIA(prompt);
+    if(!texto.trim()) throw new Error("vazio");
+    resumoCache[lid]=texto;
+    if(State.tela==="study" && State.lesson===lid){ State.estudo={ status:"ok", texto }; render(); }
+  }catch(e){
+    if(State.tela==="study" && State.lesson===lid){ State.estudo={ status:"fallback", texto:l.texto }; render(); }
+  }
+}
+
+function renderStudy(){
   const s=subjById(State.subj); const l=getLesson();
   if(!l){ goHome(); return; }
+  const est = State.estudo || { status:"loading" };
+
+  if(est.status==="loading"){
+    app.innerHTML = `<div class="screen active">
+      <div class="topbar"><button class="back-btn" onclick="App.openSubject('${s.id}')">←</button><h2 style="color:${s.cor}">${esc(l.titulo)}</h2></div>
+      <div class="content" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+        ${mascot('bounce')}
+        <div class="ia-loading" style="color:${s.cor}"><span class="ia-spinner" style="border-top-color:${s.cor}"></span> Preparando seu resumo...</div>
+        <p style="color:#999;font-size:13px">A IA está montando um material de estudo para você. 📚</p>
+      </div>
+    </div>`;
+    return;
+  }
+
+  const corpo = formatResumo(est.texto);
+  const btnLabel = l.exercicios.length ? 'Já estudei, quero responder!' : 'Sem exercícios — voltar';
   app.innerHTML = `<div class="screen active">
-    <div class="topbar">
-      <button class="back-btn" onclick="App.openSubject('${s.id}')">←</button>
-      <h2 style="color:${s.cor}">${esc(l.titulo)}</h2>
+    <div class="topbar" style="background:${s.cor};color:#fff">
+      <button class="back-btn" style="color:#fff" onclick="App.openSubject('${s.id}')">←</button>
+      <h2>${s.icon} ${esc(l.titulo)}</h2>
     </div>
-    <div class="content">
-      <div style="text-align:center;margin-bottom:10px">${mascot('')}</div>
-      <div class="lesson-content">${esc(l.texto)}</div>
+    <div class="read-track"><div class="read-fill" id="estudoProg" style="background:${s.cor}"></div></div>
+    <div class="content" id="estudoContent" style="background:${s.cor}1a">
+      <div style="text-align:center;margin-bottom:6px">${mascot('')}</div>
+      <h1 style="text-align:center;font-size:22px;color:${s.cor};margin-bottom:6px">Vamos estudar antes de responder! 📚</h1>
+      ${est.status==="fallback" ? `<p style="text-align:center;font-size:12px;color:#999;margin-bottom:8px">(Resumo automático indisponível — veja o conteúdo da lição abaixo.)</p>`:''}
+      <div class="resumo-box">${corpo}</div>
     </div>
-    <div style="padding:16px;border-top:2px solid var(--gray)">
-      <button class="btn" style="background:${s.cor};box-shadow:0 4px 0 rgba(0,0,0,.2)" onclick="App.startExercises()">
-        ${l.exercicios.length? '🚀 Iniciar Atividades':'⬅ Sem exercícios — Voltar'}
+    <div style="padding:16px;border-top:2px solid var(--gray);background:#fff">
+      <button class="btn" id="btnEstudei" disabled style="background:${s.cor};box-shadow:0 4px 0 rgba(0,0,0,.2)" onclick="App.startExercises()">
+        ⏳ Aguarde <span id="estudoCount">10</span>s...
       </button>
     </div>
   </div>`;
+  setupEstudoScreen(btnLabel, s.cor);
+}
+
+// barra de progresso de leitura + contagem regressiva de 10s do botão
+function setupEstudoScreen(btnLabel, cor){
+  const cont=document.getElementById("estudoContent");
+  const bar=document.getElementById("estudoProg");
+  if(cont && bar){
+    const upd=()=>{ const max=cont.scrollHeight-cont.clientHeight; bar.style.width=(max>4?(cont.scrollTop/max*100):100)+"%"; };
+    cont.addEventListener("scroll", upd); upd();
+  }
+  const btn=document.getElementById("btnEstudei");
+  const cnt=document.getElementById("estudoCount");
+  let restante=10;
+  clearInterval(estudoTimer);
+  estudoTimer=setInterval(()=>{
+    restante--;
+    if(restante<=0){
+      clearInterval(estudoTimer);
+      if(btn){ btn.disabled=false; btn.innerHTML="✅ "+btnLabel; }
+    } else if(cnt){ cnt.textContent=restante; }
+  },1000);
+}
+
+// transforma o texto do resumo em HTML, destacando tópicos com ⭐
+function formatResumo(txt){
+  return String(txt||"").split("\n").map(raw=>{
+    const t=raw.trim();
+    if(!t) return `<div style="height:8px"></div>`;
+    const m=t.match(/^[-•*]\s+(.*)$/);
+    if(m) return `<div class="resumo-topico"><span class="rt-ic">⭐</span><span>${esc(m[1])}</span></div>`;
+    return `<p style="margin:8px 0;line-height:1.6">${esc(t)}</p>`;
+  }).join("");
 }
 
 // ----- EXERCÍCIOS -----
 function startExercises(){
+  clearInterval(estudoTimer);
   Sound.init(); // habilita áudio após o toque do usuário
   const l=getLesson();
   if(!l || l.exercicios.length===0){ openSubject(State.subj); return; }
-  Sess = { idx:0, vidas:3, acertos:0, respondido:false, acertouAtual:false, selecionado:null, total:l.exercicios.length };
+  Sess = { idx:0, vidas:3, acertos:0, respondido:false, acertouAtual:false, selecionado:null, respAluno:"", total:l.exercicios.length };
   State.tela="exercise"; render();
 }
 
@@ -873,10 +974,18 @@ function renderExercise(){
   if(Sess.respondido){
     const ok=Sess.acertouAtual;
     let respCorreta = ex.tipo==="fill" ? ex.resposta : (ex.opcoes? ex.opcoes[ex.correta]:"");
-    footer = `<div class="feedback-bar ${ok?'correct':'wrong'}">
-      <div class="feedback-msg">${ok?'🎉 Muito bem!':'😕 Ops! Resposta certa: <span style="text-decoration:underline">'+esc(respCorreta)+'</span>'}</div>
-      <button class="btn ${ok?'':'red'}" onclick="App.nextExercise()">Continuar</button>
-    </div>`;
+    if(ok){
+      footer = `<div class="feedback-bar correct">
+        <div class="feedback-msg">🎉 Muito bem!</div>
+        <button class="btn" onclick="App.nextExercise()">Continuar</button>
+      </div>`;
+    } else {
+      // ao errar: feedback vermelho + carregando explicação (a tela de explicação assume em seguida)
+      footer = `<div class="feedback-bar wrong">
+        <div class="feedback-msg">😕 Ops! Resposta certa: <span style="text-decoration:underline">${esc(respCorreta)}</span></div>
+        <button class="btn red" disabled><span class="ia-spinner" style="width:18px;height:18px;border-top-color:#fff;border-color:rgba(255,255,255,.4);vertical-align:middle"></span> Gerando explicação...</button>
+      </div>`;
+    }
   } else {
     const dis = (ex.tipo==="fill") ? '' : (Sess.selecionado===null?'disabled':'');
     footer = `<div class="feedback-bar">
@@ -916,33 +1025,98 @@ function checkAnswer(){
   if(ex.tipo==="fill"){
     const val=document.getElementById("fillAns").value;
     if(!val.trim()) return;
+    Sess.respAluno=val;
     ok = norm(val)===norm(ex.resposta);
   } else {
     if(Sess.selecionado===null) return;
+    Sess.respAluno = (ex.opcoes? ex.opcoes[Sess.selecionado] : "");
     ok = Sess.selecionado===ex.correta;
   }
   Sess.respondido=true; Sess.acertouAtual=ok;
-  if(ok){ Sess.acertos++; Sound.correct(); }
-  else { Sess.vidas--; Sound.wrong(); }
-  renderExercise();
-  // animação de feedback
-  const wrap=document.getElementById("optWrap");
-  if(wrap && !ok) wrap.classList.add("shake");
-  // sem vidas → encerra
-  if(Sess.vidas<=0 && !ok){
-    setTimeout(()=>gameOver(), 700);
+  if(ok){
+    Sess.acertos++; Sound.correct(); renderExercise();
+  } else {
+    Sess.vidas--; Sound.wrong(); renderExercise();
+    const wrap=document.getElementById("optWrap");
+    if(wrap) wrap.classList.add("shake");
+    // mostra o feedback vermelho por um instante e então gera a explicação por IA
+    setTimeout(()=>gerarExplicacao(), 950);
   }
 }
 
 function nextExercise(){
   const l=getLesson();
   if(Sess.idx < Sess.total-1){
-    Sess.idx++; Sess.respondido=false; Sess.acertouAtual=false; Sess.selecionado=null;
+    Sess.idx++; Sess.respondido=false; Sess.acertouAtual=false; Sess.selecionado=null; Sess.respAluno="";
     renderExercise();
   } else {
     // concluiu todos
     finishLesson();
   }
+}
+
+// ----- EXPLICAÇÃO DO ERRO (gerada por IA) -----
+async function gerarExplicacao(){
+  // se o aluno saiu da atividade nesse meio tempo, não faz nada
+  if(State.tela!=="exercise" || !Sess || Sess.acertouAtual) return;
+  const l=getLesson(); const ex=l.exercicios[Sess.idx];
+  const respCorreta = ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : "");
+  const padrao = "Tudo bem errar — é assim que a gente aprende! 😊 A resposta certa é \""+respCorreta+"\". Releia o resumo com calma e tente de novo. Você consegue! 💪";
+
+  const myLesson=State.lesson, myIdx=Sess.idx;
+  const aindaValido=()=> State.tela==="exercise" && Sess && State.lesson===myLesson && Sess.idx===myIdx && !Sess.acertouAtual;
+
+  if(!IA.apiKey.trim()){ if(aindaValido()) mostrarExplicacao(padrao, respCorreta); return; }
+
+  const prompt =
+`Você é um professor gentil e encorajador do 5º ano do Ensino Fundamental.
+Um aluno de 10 anos errou a seguinte questão:
+Enunciado: ${ex.enunciado}
+Resposta do aluno: ${Sess.respAluno||"(em branco)"}
+Resposta correta: ${respCorreta}
+Conteúdo da lição: ${l.texto}
+
+Gere uma explicação curta e acolhedora que:
+- Comece dizendo que tudo bem errar, faz parte do aprendizado
+- Explique de forma simples por que a resposta correta é a certa
+- Use um exemplo do cotidiano para ilustrar
+- Termine com uma frase de incentivo
+- Tenha no máximo 100 palavras
+- Use linguagem adequada para uma criança de 10 anos`;
+  try{
+    const txt = await chamarIA(prompt);
+    if(aindaValido()) mostrarExplicacao(txt.trim() || padrao, respCorreta);
+  }catch(e){
+    if(aindaValido()) mostrarExplicacao(padrao, respCorreta);
+  }
+}
+
+function mostrarExplicacao(texto, respCorreta){
+  State.explic = { texto, respCorreta };
+  State.tela = "explain";
+  render();
+}
+
+function renderExplain(){
+  const e = State.explic || { texto:"", respCorreta:"" };
+  const fim = Sess.vidas<=0;
+  const btnLabel = fim ? "Entendi 💪" : "Entendi, próxima pergunta!";
+  app.innerHTML = `<div class="screen active">
+    <div class="content" style="background:#fffbe6">
+      <div style="text-align:center">${mascot('')}</div>
+      <h1 style="text-align:center;color:#b8860b;font-size:23px;margin:8px 0 14px">Quase lá! Veja a explicação 💡</h1>
+      <div class="explic-resp">✅ Resposta certa: <b>${esc(e.respCorreta)}</b></div>
+      <div class="resumo-box" style="font-size:17px">${formatResumo(e.texto)}</div>
+    </div>
+    <div style="padding:16px;border-top:2px solid var(--gray);background:#fff">
+      <button class="btn" onclick="App.continuarAposExplicacao()">✅ ${btnLabel}</button>
+    </div>
+  </div>`;
+}
+
+function continuarAposExplicacao(){
+  if(Sess.vidas<=0){ gameOver(); return; }
+  nextExercise();
 }
 
 function gameOver(){
@@ -1230,7 +1404,34 @@ function salvarChaveIA(){
 }
 function setModoIA(v){ IA.modo=v; saveIA(); }
 
-// Monta o prompt e chama a API do Groq direto do navegador
+// Chamada genérica à API do Groq (compatível com OpenAI). Retorna o texto; lança Error em falha.
+async function chamarIA(prompt){
+  if(!IA.apiKey.trim()) throw new Error("Sem chave de API configurada.");
+  const resp = await fetch(IA_ENDPOINT, {
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "Authorization":"Bearer " + IA.apiKey.trim()
+    },
+    body: JSON.stringify({
+      model: IA_MODELO,
+      messages:[{ role:"user", content: prompt }],
+      temperature: 0.7
+    })
+  });
+  if(!resp.ok){
+    let detalhe="";
+    try{ const e=await resp.json(); detalhe = e.error && e.error.message ? e.error.message : ""; }catch(_){}
+    if(resp.status===401) detalhe = detalhe || "Chave da API inválida.";
+    if(resp.status===429) detalhe = detalhe || "Limite de uso atingido. Aguarde um pouco e tente novamente.";
+    throw new Error(`Erro ${resp.status}${detalhe? " — "+detalhe : ""}`);
+  }
+  const data = await resp.json();
+  return data.choices && data.choices[0] && data.choices[0].message
+    ? (data.choices[0].message.content || "") : "";
+}
+
+// Monta o prompt e chama a IA para gerar exercícios (painel do professor)
 async function gerarExerciciosIA(){
   syncTextInputs();
   const L=Teacher.editingLesson;
@@ -1254,30 +1455,7 @@ Retorne APENAS um JSON válido, sem explicações, no formato:
 Conteúdo da lição: ${conteudo}`;
 
   try{
-    const resp = await fetch(IA_ENDPOINT, {
-      method:"POST",
-      headers:{
-        "Content-Type":"application/json",
-        "Authorization":"Bearer " + IA.apiKey.trim()
-      },
-      body: JSON.stringify({
-        model: IA_MODELO,
-        messages:[{ role:"user", content: prompt }],
-        temperature: 0.7
-      })
-    });
-
-    if(!resp.ok){
-      let detalhe="";
-      try{ const e=await resp.json(); detalhe = e.error && e.error.message ? e.error.message : ""; }catch(_){}
-      if(resp.status===401) detalhe = detalhe || "Chave da API inválida.";
-      if(resp.status===429) detalhe = detalhe || "Limite de uso atingido. Aguarde um pouco e tente novamente.";
-      throw new Error(`Erro ${resp.status}${detalhe? " — "+detalhe : ""}`);
-    }
-
-    const data = await resp.json();
-    const texto = data.choices && data.choices[0] && data.choices[0].message
-      ? (data.choices[0].message.content || "") : "";
+    const texto = await chamarIA(prompt);
     const novos = parseExerciciosIA(texto);
     if(!novos.length) throw new Error("A IA não retornou exercícios reconhecíveis. Tente novamente.");
 
@@ -1475,7 +1653,7 @@ function teacherProgressTab(){
    ============================================================ */
 window.App = {
   goHome, openSubject, openLesson, startExercises, selectOpt, onFillInput,
-  checkAnswer, nextExercise, confirmQuit, openProfile, saveName, resetProgress, toggleSound,
+  checkAnswer, nextExercise, continuarAposExplicacao, confirmQuit, openProfile, saveName, resetProgress, toggleSound,
   // professor
   openPwModal, closePwModal, checkPassword, teacherTab, teacherSelectSubj,
   newLesson, editLesson, deleteLesson, addExercise, removeExercise, setExType,

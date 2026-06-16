@@ -42,8 +42,11 @@ O CSS e o JS são organizados em seções comentadas. No JavaScript (dentro de u
   `mascot` (SVG), módulo `Sound` (Web Audio API), load/save do localStorage.
 - **C) GAMIFICAÇÃO** — XP, vidas, streak, níveis (`concederRecompensa`), e medalhas
   (`ACHIEVEMENTS`, `verificarMedalhas`, `statsProgresso`).
-- **D) UI DO ALUNO** — `render()` central + telas: `home`, `lessons`, `content`,
-  `exercise`, `done`, `profile`. Estado em `State` e sessão de exercícios em `Sess`.
+- **D) UI DO ALUNO** — `render()` central + telas: `home`, `lessons`, `study`,
+  `exercise`, `explain`, `done`, `profile`. Estado em `State` e sessão de exercícios
+  em `Sess`. A tela `study` mostra um **resumo gerado por IA** antes dos exercícios
+  (botão liberado após contagem de 10s, com cache por sessão em `resumoCache`); ao
+  errar, a tela `explain` mostra uma **explicação gerada por IA**.
 - **E) UI DO PROFESSOR** — login por senha, abas (lições / editor / progresso),
   CRUD de lições/exercícios, e o painel de **geração por IA**.
 - **F) INICIALIZAÇÃO** — objeto público `window.App` (todos os handlers chamados via
@@ -106,7 +109,14 @@ Quatro chaves (todas criadas no boot se não existirem):
   - Modelo: `llama-3.1-8b-instant`
   - Auth: header `Authorization: Bearer <chave>`
   - Resposta extraída de `data.choices[0].message.content`.
-- Fluxo: `gerarExerciciosIA()` monta o prompt → `fetch` → `parseExerciciosIA()`
+- Helper compartilhado: `chamarIA(prompt)` faz o `fetch` e devolve o texto (lança
+  `Error` em falha). Usado por três fluxos:
+  1. **Gerar exercícios** (professor) — `gerarExerciciosIA()`.
+  2. **Resumo de estudo** (aluno) — `openLesson()` gera o resumo; cache em `resumoCache`;
+     fallback para o texto original do professor se não houver chave ou der erro.
+  3. **Explicação ao errar** (aluno) — `gerarExplicacao()`; fallback para uma mensagem
+     padrão acolhedora.
+- Fluxo de exercícios: `gerarExerciciosIA()` monta o prompt → `chamarIA` → `parseExerciciosIA()`
   (limpa cercas ```` ```json ````, faz `JSON.parse`, mapeia
   `multipla_escolha→mc` / `verdadeiro_falso→vf` / `completar_lacunas→fill`,
   e `acharIndiceCorreto()` resolve a opção correta por texto ou letra A/B/C/D).
