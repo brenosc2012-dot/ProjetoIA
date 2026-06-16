@@ -601,10 +601,18 @@ function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,
 function norm(s){ return String(s||"").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[̀-ͯ]/g,""); }
 
 // ----- LIÇÕES no Firestore -----
-// Documento Firestore: { disciplina, titulo, conteudo, exercicios, criadoEm }
-// Lição interna no app:  { id, titulo, texto, exercicios }
+// Documento Firestore: { disciplina, titulo, conteudo, exercicios, criadoEm, resumoIA, explicacoes }
+// Lição interna no app:  { id, titulo, texto, exercicios, resumoIA, explicacoes }
+// resumoIA / explicacoes guardam o conteúdo gerado pela IA para ser compartilhado entre dispositivos.
 function licaoDeDoc(id, d){
-  return { id, titulo:d.titulo||"", texto:d.conteudo||"", exercicios:Array.isArray(d.exercicios)?d.exercicios:[] };
+  return {
+    id,
+    titulo:d.titulo||"",
+    texto:d.conteudo||"",
+    exercicios:Array.isArray(d.exercicios)?d.exercicios:[],
+    resumoIA: d.resumoIA||"",
+    explicacoes: (d.explicacoes && typeof d.explicacoes==="object") ? d.explicacoes : {}
+  };
 }
 function removeLicaoLocal(id){ SUBJECTS.forEach(s=>{ DATA[s.id]=(DATA[s.id]||[]).filter(l=>l.id!==id); }); }
 
@@ -931,12 +939,17 @@ async function openLesson(lid){
   const l=getLesson();
   if(!l){ goHome(); return; }
 
-  // cache por sessão: se já gerou o resumo desta lição, mostra na hora
+  // 1) resumo já salvo no Firestore (gerado antes, por qualquer dispositivo) → usa direto, sem IA
+  if(l.resumoIA && l.resumoIA.trim()){
+    resumoCache[lid]=l.resumoIA;
+    State.estudo={ status:"ok", texto:l.resumoIA }; render(); return;
+  }
+  // 2) cache em memória desta sessão
   if(resumoCache[lid]){ State.estudo={ status:"ok", texto:resumoCache[lid] }; render(); return; }
-  // sem chave configurada → usa o conteúdo original do professor
+  // 3) sem chave configurada neste aparelho → usa o conteúdo original do professor
   if(!IA.apiKey.trim()){ State.estudo={ status:"fallback", texto:l.texto }; render(); return; }
 
-  // chama a IA para gerar o resumo
+  // 4) gera o resumo pela IA e salva no Firestore para os outros dispositivos
   State.estudo={ status:"loading" }; render();
   const prompt =
 `Você é um professor do 5º ano do Ensino Fundamental (Sistema Positivo).
@@ -952,6 +965,9 @@ Conteúdo da lição: ${l.texto}`;
     const texto = await chamarIA(prompt);
     if(!texto.trim()) throw new Error("vazio");
     resumoCache[lid]=texto;
+    l.resumoIA=texto;
+    // persiste no Firestore (best-effort; não bloqueia a tela)
+    try{ db.collection("licoes").doc(lid).set({ resumoIA:texto }, { merge:true }); }catch(_){}
     if(State.tela==="study" && State.lesson===lid){ State.estudo={ status:"ok", texto }; render(); }
   }catch(e){
     if(State.tela==="study" && State.lesson===lid){ State.estudo={ status:"fallback", texto:l.texto }; render(); }
@@ -1155,12 +1171,19 @@ async function gerarExplicacao(){
   // se o aluno saiu da atividade nesse meio tempo, não faz nada
   if(State.tela!=="exercise" || !Sess || Sess.acertouAtual) return;
   const l=getLesson(); const ex=l.exercicios[Sess.idx];
+  const exId = ex.id;
   const respCorreta = ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : "");
   const padrao = "Tudo bem errar — é assim que a gente aprende! 😊 A resposta certa é \""+respCorreta+"\". Releia o resumo com calma e tente de novo. Você consegue! 💪";
 
   const myLesson=State.lesson, myIdx=Sess.idx;
   const aindaValido=()=> State.tela==="exercise" && Sess && State.lesson===myLesson && Sess.idx===myIdx && !Sess.acertouAtual;
 
+  // 1) explicação já salva no Firestore (gerada antes, por qualquer dispositivo) → usa direto
+  if(l.explicacoes && exId && l.explicacoes[exId]){
+    if(aindaValido()) mostrarExplicacao(l.explicacoes[exId], respCorreta);
+    return;
+  }
+  // 2) sem chave neste aparelho → mensagem padrão acolhedora
   if(!IA.apiKey.trim()){ if(aindaValido()) mostrarExplicacao(padrao, respCorreta); return; }
 
   const prompt =
@@ -1180,7 +1203,15 @@ Gere uma explicação curta e acolhedora que:
 - Use linguagem adequada para uma criança de 10 anos`;
   try{
     const txt = await chamarIA(prompt);
-    if(aindaValido()) mostrarExplicacao(txt.trim() || padrao, respCorreta);
+    const final = txt.trim() || padrao;
+    // persiste a explicação no Firestore (compartilha com os outros dispositivos)
+    if(txt.trim() && exId){
+      l.explicacoes = l.explicacoes || {};
+      l.explicacoes[exId] = final;
+      const upd={}; upd["explicacoes."+exId]=final;
+      try{ db.collection("licoes").doc(myLesson).update(upd); }catch(_){}
+    }
+    if(aindaValido()) mostrarExplicacao(final, respCorreta);
   }catch(e){
     if(aindaValido()) mostrarExplicacao(padrao, respCorreta);
   }
@@ -1721,17 +1752,23 @@ async function saveLesson(){
   };
   toast("Salvando...");
   try{
-    if(L.id){ // editar existente
-      await db.collection("licoes").doc(L.id).set(payload, { merge:true });
+    if(L.id){ // editar existente — invalida o conteúdo de IA (o material pode ter mudado)
+      await db.collection("licoes").doc(L.id).set({
+        ...payload,
+        resumoIA: "",
+        explicacoes: firebase.firestore.FieldValue.delete()
+      }, { merge:true });
     } else { // nova
       payload.criadoEm = firebase.firestore.FieldValue.serverTimestamp();
       const ref = await db.collection("licoes").add(payload);
       L.id = ref.id;
     }
+    // limpa o cache em memória do resumo desta lição (foi invalidado)
+    delete resumoCache[L.id];
     // atualiza o estado local (remove de onde estava e re-adiciona na disciplina atual)
     removeLicaoLocal(L.id);
     if(!DATA[disc]) DATA[disc]=[];
-    DATA[disc].push({ id:L.id, titulo:L.titulo, texto:L.texto, exercicios:L.exercicios });
+    DATA[disc].push({ id:L.id, titulo:L.titulo, texto:L.texto, exercicios:L.exercicios, resumoIA:"", explicacoes:{} });
 
     Teacher.editingLesson=null; Teacher.tab="licoes";
     toast("Lição salva com sucesso! ✅");

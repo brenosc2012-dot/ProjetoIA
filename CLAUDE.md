@@ -75,9 +75,15 @@ do Firestore (projeto `estudamais-5cb1b`). O Firebase é carregado por **CDN com
 inicializado em `initFirebase()` → `db = firebase.firestore()` (com `enablePersistence`
 best-effort para cache offline).
 
-- Documento Firestore: `{ disciplina, titulo, conteudo, exercicios, criadoEm }`.
-- Lição interna no app: `{ id, titulo, texto, exercicios }` (note: `conteudo`↔`texto`,
-  `id` = id do documento). Conversão em `licaoDeDoc()`.
+- Documento Firestore: `{ disciplina, titulo, conteudo, exercicios, criadoEm, resumoIA, explicacoes }`.
+- Lição interna no app: `{ id, titulo, texto, exercicios, resumoIA, explicacoes }`
+  (note: `conteudo`↔`texto`, `id` = id do documento). Conversão em `licaoDeDoc()`.
+- **Conteúdo de IA é persistido no Firestore para compartilhar entre dispositivos:**
+  `resumoIA` (resumo de estudo, string) e `explicacoes` (mapa `{exId: texto}` das
+  explicações de erro). Gerado uma vez por qualquer aparelho e salvo no doc; os demais
+  usam o salvo (sem nova chamada à IA e sem precisar da chave naquele aparelho).
+  `saveLesson()` invalida ambos ao editar (`resumoIA:""` + `explicacoes` via
+  `FieldValue.delete()`), pois o material pode ter mudado.
 - `ouvirLicoes()` registra um **listener em tempo real** (`onSnapshot`) na coleção:
   `construirDATA(snap)` reagrupa em `DATA[disciplina]` e `aoAtualizarLicoes()`
   re-renderiza quando a tela é segura (home/lessons/profile/teacher-licoes), para que
