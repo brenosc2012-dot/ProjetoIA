@@ -939,6 +939,10 @@ async function openLesson(lid){
   const l=getLesson();
   if(!l){ goHome(); return; }
 
+  // pré-gera as explicações de erro em segundo plano (só em aparelho com a chave),
+  // para que qualquer dispositivo já encontre a explicação pronta no Firestore
+  if(IA.apiKey.trim()) pregerarExplicacoes(l);
+
   // 1) resumo já salvo no Firestore (gerado antes, por qualquer dispositivo) → usa direto, sem IA
   if(l.resumoIA && l.resumoIA.trim()){
     resumoCache[lid]=l.resumoIA;
@@ -1170,7 +1174,12 @@ function nextExercise(){
 async function gerarExplicacao(){
   // se o aluno saiu da atividade nesse meio tempo, não faz nada
   if(State.tela!=="exercise" || !Sess || Sess.acertouAtual) return;
-  const l=getLesson(); const ex=l.exercicios[Sess.idx];
+  const l=getLesson();
+  if(!l || !l.exercicios || !l.exercicios[Sess.idx]){
+    mostrarExplicacao("Tudo bem errar — faz parte do aprendizado! 😊 Releia o resumo com calma e tente de novo. Você consegue! 💪", "");
+    return;
+  }
+  const ex=l.exercicios[Sess.idx];
   const exId = ex.id;
   const respCorreta = ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : "");
   const padrao = "Tudo bem errar — é assim que a gente aprende! 😊 A resposta certa é \""+respCorreta+"\". Releia o resumo com calma e tente de novo. Você consegue! 💪";
@@ -1221,6 +1230,46 @@ function mostrarExplicacao(texto, respCorreta){
   State.explic = { texto, respCorreta };
   State.tela = "explain";
   render();
+}
+
+// Pré-gera (em segundo plano) a explicação de TODAS as questões que ainda não têm uma
+// salva, e grava no Firestore. Assim qualquer dispositivo — inclusive sem a chave —
+// já encontra a explicação pronta ao errar. Só roda em aparelho com a chave configurada.
+let pregerando = false;
+async function pregerarExplicacoes(l){
+  if(pregerando || !l || !IA.apiKey.trim()) return;
+  l.explicacoes = l.explicacoes || {};
+  const faltando = (l.exercicios||[]).filter(ex=> ex.id && !l.explicacoes[ex.id]);
+  if(!faltando.length) return;
+  pregerando = true;
+  try{
+    for(const ex of faltando){
+      const respCorreta = ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : "");
+      const prompt =
+`Você é um professor gentil e encorajador do 5º ano do Ensino Fundamental.
+Uma criança de 10 anos pode errar a seguinte questão:
+Enunciado: ${ex.enunciado}
+Resposta correta: ${respCorreta}
+Conteúdo da lição: ${l.texto}
+
+Gere uma explicação curta e acolhedora que:
+- Comece dizendo que tudo bem errar, faz parte do aprendizado
+- Explique de forma simples por que a resposta correta é a certa
+- Use um exemplo do cotidiano para ilustrar
+- Termine com uma frase de incentivo
+- Tenha no máximo 100 palavras
+- Use linguagem adequada para uma criança de 10 anos`;
+      try{
+        const txt = await chamarIA(prompt);
+        const final = (txt||"").trim();
+        if(final){
+          l.explicacoes[ex.id] = final;
+          const upd={}; upd["explicacoes."+ex.id]=final;
+          try{ await db.collection("licoes").doc(l.id).update(upd); }catch(_){}
+        }
+      }catch(e){ /* segue para a próxima questão */ }
+    }
+  } finally { pregerando = false; }
 }
 
 function renderExplain(){

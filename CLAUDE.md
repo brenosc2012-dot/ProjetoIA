@@ -84,6 +84,9 @@ best-effort para cache offline).
   usam o salvo (sem nova chamada à IA e sem precisar da chave naquele aparelho).
   `saveLesson()` invalida ambos ao editar (`resumoIA:""` + `explicacoes` via
   `FieldValue.delete()`), pois o material pode ter mudado.
+- `pregerarExplicacoes(l)` roda em segundo plano ao abrir a lição **num aparelho com
+  a chave** e gera/salva a explicação de TODAS as questões que ainda não têm uma, para
+  que dispositivos sem a chave (ex.: o celular) encontrem a explicação pronta ao errar.
 - `ouvirLicoes()` registra um **listener em tempo real** (`onSnapshot`) na coleção:
   `construirDATA(snap)` reagrupa em `DATA[disciplina]` e `aoAtualizarLicoes()`
   re-renderiza quando a tela é segura (home/lessons/profile/teacher-licoes), para que
