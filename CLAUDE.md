@@ -78,9 +78,12 @@ best-effort para cache offline).
 - Documento Firestore: `{ disciplina, titulo, conteudo, exercicios, criadoEm }`.
 - Lição interna no app: `{ id, titulo, texto, exercicios }` (note: `conteudo`↔`texto`,
   `id` = id do documento). Conversão em `licaoDeDoc()`.
-- `loadLicoes()` baixa tudo e agrupa em `DATA[disciplina]`. Se a coleção estiver vazia
-  na 1ª vez (e `SEED_FLAG` não setado no navegador), `seedFirestore()` popula os 27
-  exemplos uma vez.
+- `ouvirLicoes()` registra um **listener em tempo real** (`onSnapshot`) na coleção:
+  `construirDATA(snap)` reagrupa em `DATA[disciplina]` e `aoAtualizarLicoes()`
+  re-renderiza quando a tela é segura (home/lessons/profile/teacher-licoes), para que
+  mudanças feitas em **qualquer dispositivo** apareçam ao vivo. A Promise resolve no
+  primeiro snapshot (para o boot). Se a coleção estiver vazia na 1ª vez (e `SEED_FLAG`
+  não setado no navegador), `seedFirestore()` popula os 27 exemplos uma vez.
 - CRUD do professor é **assíncrono** e grava no Firestore: `saveLesson()`
   (`add`/`set merge`), `deleteLesson()` (`delete`), atualizando `DATA` local em seguida.
 - ⚠️ **Regras do Firestore:** o app é client-only; o projeto precisa ter regras que

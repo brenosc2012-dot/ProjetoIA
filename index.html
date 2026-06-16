@@ -608,10 +608,11 @@ function licaoDeDoc(id, d){
 }
 function removeLicaoLocal(id){ SUBJECTS.forEach(s=>{ DATA[s.id]=(DATA[s.id]||[]).filter(l=>l.id!==id); }); }
 
-// Carrega todas as lições do Firestore para DATA (agrupadas por disciplina).
-async function loadLicoes(){
+let licoesUnsub = null;
+
+// Reconstrói DATA (agrupado por disciplina) a partir de um snapshot do Firestore.
+function construirDATA(snap){
   SUBJECTS.forEach(s=> DATA[s.id]=[]);
-  const snap = await db.collection("licoes").get();
   const docs=[];
   snap.forEach(doc=> docs.push({ id:doc.id, d:doc.data() }));
   // ordena por criadoEm (mais antigo primeiro), tolerando ausência
@@ -621,11 +622,40 @@ async function loadLicoes(){
     if(!DATA[disc]) DATA[disc]=[]; // disciplina fora da lista padrão também é aceita
     DATA[disc].push(licaoDeDoc(id, d));
   });
-  // primeira execução com banco vazio → semeia os exemplos uma vez
-  if(docs.length===0 && !localStorage.getItem(SEED_FLAG)){
-    await seedFirestore();
-  }
-  try{ localStorage.setItem(SEED_FLAG, "1"); }catch(e){}
+  return docs.length;
+}
+
+// Listener em tempo real: qualquer mudança nas lições (deste ou de outro dispositivo)
+// atualiza DATA e re-renderiza. A Promise resolve no primeiro snapshot (para o boot).
+function ouvirLicoes(){
+  if(licoesUnsub){ try{ licoesUnsub(); }catch(e){} licoesUnsub=null; }
+  return new Promise((resolve, reject)=>{
+    let primeiro=true;
+    licoesUnsub = db.collection("licoes").onSnapshot(async snap=>{
+      const total = construirDATA(snap);
+      if(primeiro){
+        primeiro=false;
+        // primeira execução com banco vazio → semeia os exemplos uma vez
+        if(total===0 && !localStorage.getItem(SEED_FLAG)){
+          try{ await seedFirestore(); }catch(e){}
+        }
+        try{ localStorage.setItem(SEED_FLAG, "1"); }catch(e){}
+        resolve();
+      } else {
+        aoAtualizarLicoes(); // atualização vinda do servidor (outro dispositivo, etc.)
+      }
+    }, err=>{
+      if(primeiro){ primeiro=false; reject(err); }
+    });
+  });
+}
+
+// Re-renderiza ao receber atualização do servidor, sem atrapalhar o aluno/professor no meio de algo.
+function aoAtualizarLicoes(){
+  const t=State.tela;
+  const seguro = t==="home" || t==="lessons" || t==="profile" ||
+                 (t==="teacher" && Teacher.tab!=="novo" && !Teacher.gerando);
+  if(seguro) render();
 }
 
 // Semeia o Firestore com as lições de exemplo (uma única vez).
@@ -1784,7 +1814,7 @@ async function boot(){
   mostrarCarregando("Carregando lições...");
   try{
     initFirebase();
-    await loadLicoes();
+    await ouvirLicoes(); // listener em tempo real; resolve no primeiro snapshot
     State.tela="home"; render();
   }catch(e){
     mostrarErroConexao();
