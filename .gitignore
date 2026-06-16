@@ -1,0 +1,12 @@
+# Arquivo temporário usado para validar a sintaxe do JS
+_check.js
+
+# Sistema operacional
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editores
+.vscode/
+*.swp
+*~

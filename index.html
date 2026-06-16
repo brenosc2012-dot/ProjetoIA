@@ -1,0 +1,1499 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#7c5cff">
+<title>EstudaMais — Aventura de Estudos</title>
+<style>
+/* ============================================================
+   ESTUDAMAIS — App de estudos gamificado (5º ano)
+   Estrutura do CSS:
+   1. Reset & variáveis
+   2. Layout base mobile-first
+   3. Componentes (botões, cards, barras)
+   4. Telas do aluno
+   5. Painel do professor
+   6. Gamificação (XP, vidas, celebração, confete)
+   7. Mascote
+   8. Animações
+   ============================================================ */
+
+/* ---------- 1. RESET & VARIÁVEIS ---------- */
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+:root{
+  --brand:#7c5cff; --brand-d:#5b3fd6;     /* cor principal do app (botões/topo) */
+  --green:#58cc02; --green-d:#46a302;      /* usado só para feedback de acerto */
+  --blue:#1cb0f6; --red:#ff4b4b; --yellow:#ffc800;
+  --gray:#e5e5e5; --gray-d:#afafaf; --text:#3c3c3c;
+  --bg:#fff; --shadow:0 4px 0 rgba(0,0,0,.15);
+}
+html,body{ height:100%; }
+body{
+  font-family:'Segoe UI',-apple-system,Roboto,'Helvetica Neue',Arial,sans-serif;
+  font-size:16px; color:var(--text);
+  background:#e8f4ff; line-height:1.5;
+  display:flex; justify-content:center;
+  overscroll-behavior:none;
+}
+#app{
+  width:100%; max-width:480px;
+  height:100vh; height:100dvh;            /* altura fixa da viewport (dvh = melhor no mobile) */
+  background:var(--bg); position:relative;
+  display:flex; flex-direction:column;
+  box-shadow:0 0 40px rgba(0,0,0,.08);
+  overflow:hidden;
+}
+
+/* ---------- 2. LAYOUT BASE ---------- */
+.screen{ display:none; flex-direction:column; flex:1; min-height:0; animation:fadeIn .25s ease; }
+.screen.active{ display:flex; }
+.topbar{
+  display:flex; align-items:center; gap:10px;
+  padding:14px 16px; background:var(--bg);
+  border-bottom:2px solid var(--gray); position:sticky; top:0; z-index:10;
+}
+.topbar h2{ font-size:18px; flex:1; }
+.content{ flex:1; min-height:0; padding:16px; overflow-y:auto; -webkit-overflow-scrolling:touch; scrollbar-width:thin; scrollbar-color:var(--brand) #ececff; }
+/* barra de rolagem visível e colorida (navegadores WebKit/Chromium) */
+.content::-webkit-scrollbar{ width:10px; }
+.content::-webkit-scrollbar-track{ background:#ececff; border-radius:10px; }
+.content::-webkit-scrollbar-thumb{ background:var(--brand); border-radius:10px; border:2px solid #ececff; }
+.content::-webkit-scrollbar-thumb:active{ background:var(--brand-d); }
+.back-btn{
+  width:42px; height:42px; border:none; background:none; cursor:pointer;
+  font-size:26px; color:var(--gray-d); border-radius:12px; flex-shrink:0;
+}
+.back-btn:active{ background:var(--gray); }
+
+/* ---------- 3. COMPONENTES ---------- */
+.btn{
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  width:100%; min-height:52px; padding:14px 20px;
+  border:none; border-radius:16px; cursor:pointer;
+  font-size:17px; font-weight:700; font-family:inherit;
+  color:#fff; background:var(--brand); box-shadow:0 4px 0 var(--brand-d);
+  text-transform:uppercase; letter-spacing:.5px;
+  transition:transform .05s, box-shadow .05s;
+}
+.btn:active{ transform:translateY(3px); box-shadow:0 1px 0 var(--brand-d); }
+.btn:disabled{ background:var(--gray); box-shadow:0 4px 0 var(--gray-d); color:var(--gray-d); cursor:default; }
+.btn.blue{ background:var(--blue); box-shadow:0 4px 0 #1899d6; }
+.btn.blue:active{ box-shadow:0 1px 0 #1899d6; }
+.btn.red{ background:var(--red); box-shadow:0 4px 0 #e63939; }
+.btn.gray{ background:#fff; color:var(--gray-d); box-shadow:0 4px 0 var(--gray); border:2px solid var(--gray); }
+.btn.gray:active{ box-shadow:0 1px 0 var(--gray); }
+.btn.small{ min-height:44px; font-size:14px; padding:10px 14px; width:auto; }
+
+input,textarea,select{
+  width:100%; padding:14px; font-size:16px; font-family:inherit;
+  border:2px solid var(--gray); border-radius:12px; background:#f7f7f7; color:var(--text);
+  margin-bottom:12px;
+}
+input:focus,textarea:focus,select:focus{ outline:none; border-color:var(--blue); background:#fff; }
+textarea{ resize:vertical; min-height:90px; }
+label{ display:block; font-weight:700; font-size:14px; margin-bottom:6px; color:#777; }
+
+.card{
+  background:#fff; border:2px solid var(--gray); border-bottom-width:4px;
+  border-radius:16px; padding:16px; margin-bottom:12px; cursor:pointer;
+  transition:transform .05s;
+}
+.card:active{ transform:scale(.98); }
+
+/* ---------- 4. TELAS DO ALUNO ---------- */
+/* Home / seleção de disciplinas */
+.home-header{
+  background:linear-gradient(135deg,#7c5cff 0%,#a06bff 55%,#4d9fff 100%); color:#fff;
+  padding:20px 16px 24px; border-radius:0 0 24px 24px;
+}
+.home-header .greeting{ font-size:20px; font-weight:800; }
+.home-header .sub{ font-size:14px; opacity:.9; }
+.stat-row{ display:flex; gap:10px; margin-top:14px; }
+.stat-pill{
+  flex:1; background:rgba(255,255,255,.2); border-radius:14px;
+  padding:8px; text-align:center; backdrop-filter:blur(4px);
+}
+.stat-pill .v{ font-size:20px; font-weight:800; }
+.stat-pill .l{ font-size:11px; opacity:.9; text-transform:uppercase; }
+
+.subj-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.subj-card{
+  border-radius:18px; padding:16px 12px; color:#fff; cursor:pointer;
+  box-shadow:0 4px 0 rgba(0,0,0,.18); position:relative; overflow:hidden;
+  transition:transform .05s, box-shadow .05s; min-height:118px;
+  display:flex; flex-direction:column; justify-content:space-between;
+}
+.subj-card:active{ transform:translateY(3px); box-shadow:0 1px 0 rgba(0,0,0,.18); }
+.subj-card .icon{ font-size:34px; }
+.subj-card .name{ font-size:16px; font-weight:800; }
+.subj-card .meta{ font-size:11px; opacity:.95; font-weight:600; }
+.subj-card .lvl-badge{
+  position:absolute; top:8px; right:8px; background:rgba(0,0,0,.18);
+  border-radius:10px; padding:2px 8px; font-size:11px; font-weight:800;
+}
+
+/* Lista de lições */
+.lesson-item{
+  display:flex; align-items:center; gap:14px;
+}
+.lesson-item .bubble{
+  width:56px; height:56px; border-radius:50%; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:26px; color:#fff; box-shadow:0 4px 0 rgba(0,0,0,.15);
+}
+.lesson-item .bubble.done{ background:var(--yellow)!important; box-shadow:0 4px 0 #d9a900!important; }
+.lesson-item .info{ flex:1; }
+.lesson-item .info .t{ font-weight:800; font-size:16px; }
+.lesson-item .info .d{ font-size:12px; color:var(--gray-d); }
+
+/* Conteúdo da lição */
+.lesson-content{ font-size:17px; line-height:1.7; white-space:pre-wrap; }
+.lesson-content h1,.lesson-content h2{ margin:8px 0; }
+
+/* Exercícios */
+.exercise-top{ padding:12px 16px; display:flex; align-items:center; gap:12px; }
+.progress-track{ flex:1; height:16px; background:var(--gray); border-radius:10px; overflow:hidden; }
+.progress-fill{ height:100%; background:var(--green); border-radius:10px; transition:width .3s; width:0; }
+.hearts{ font-size:20px; letter-spacing:2px; flex-shrink:0; }
+.q-prompt{ font-size:21px; font-weight:800; margin:10px 0 20px; line-height:1.4; }
+.opt{
+  display:flex; align-items:center; gap:12px;
+  border:2px solid var(--gray); border-bottom-width:4px; border-radius:14px;
+  padding:16px; margin-bottom:12px; cursor:pointer; font-size:17px; font-weight:600;
+  background:#fff; transition:transform .05s, border-color .1s, background .1s;
+}
+.opt:active{ transform:scale(.98); }
+.opt.selected{ border-color:var(--blue); background:#ddf4ff; color:#1899d6; }
+.opt.correct{ border-color:var(--green); background:#d7ffb8; color:var(--green-d); }
+.opt.wrong{ border-color:var(--red); background:#ffdfe0; color:var(--red); }
+.opt .letter{
+  width:30px; height:30px; border-radius:8px; border:2px solid var(--gray);
+  display:flex; align-items:center; justify-content:center; font-weight:800; flex-shrink:0; font-size:14px;
+}
+/* completar lacunas */
+.fill-input{ font-size:20px; text-align:center; font-weight:700; }
+
+/* feedback footer */
+.feedback-bar{
+  padding:18px 16px 24px; border-top:2px solid var(--gray);
+  transition:background .2s;
+}
+.feedback-bar.correct{ background:#d7ffb8; }
+.feedback-bar.wrong{ background:#ffdfe0; }
+.feedback-msg{ display:flex; align-items:center; gap:10px; font-weight:800; font-size:18px; margin-bottom:12px; }
+.feedback-bar.correct .feedback-msg{ color:var(--green-d); }
+.feedback-bar.wrong .feedback-msg{ color:var(--red); }
+
+/* Conclusão / celebração */
+.celebrate{
+  flex:1; min-height:0; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; justify-content:safe center; /* 'safe' evita cortar o topo ao rolar */
+  text-align:center; padding:24px; position:relative; overflow-y:auto;
+}
+.celebrate h1{ font-size:30px; color:var(--yellow); margin:16px 0 8px; }
+.celebrate .reward-row{ display:flex; gap:14px; margin:20px 0; }
+.reward-box{
+  background:#fff; border:2px solid var(--gray); border-bottom-width:4px;
+  border-radius:16px; padding:14px 20px; min-width:96px;
+}
+.reward-box .rv{ font-size:26px; font-weight:800; }
+.reward-box.xp{ color:var(--yellow); } .reward-box.xp{ border-color:#ffe699; }
+.reward-box.streak{ color:var(--red); border-color:#ffc2c2; }
+.medal-pop{ display:flex; align-items:center; gap:12px; background:#fffbe6; border:2px solid #ffe699;
+  border-radius:14px; padding:10px 14px; margin-bottom:8px; }
+
+/* grade de medalhas (perfil) */
+.medal-grid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+.medal{ background:#fff; border:2px solid var(--gray); border-radius:14px; padding:12px 6px; text-align:center; }
+.medal.locked{ opacity:.45; filter:grayscale(1); }
+.medal .mi{ font-size:30px; }
+.medal .mt{ font-size:11px; font-weight:700; margin-top:4px; line-height:1.2; }
+
+/* ---------- 5. PAINEL DO PROFESSOR ---------- */
+.teacher-tabs{ display:flex; border-bottom:2px solid var(--gray); background:#fff; }
+.teacher-tab{
+  flex:1; padding:14px 4px; text-align:center; font-weight:700; font-size:13px;
+  border:none; background:none; color:var(--gray-d); cursor:pointer; border-bottom:3px solid transparent;
+}
+.teacher-tab.active{ color:var(--blue); border-bottom-color:var(--blue); }
+.t-lesson-row{
+  display:flex; align-items:center; gap:10px; background:#fff;
+  border:2px solid var(--gray); border-radius:12px; padding:12px; margin-bottom:10px;
+}
+.t-lesson-row .info{ flex:1; min-width:0; }
+.t-lesson-row .info .t{ font-weight:800; }
+.t-lesson-row .info .d{ font-size:12px; color:var(--gray-d); }
+.icon-btn{
+  width:40px; height:40px; border:none; border-radius:10px; background:#f0f0f0;
+  font-size:18px; cursor:pointer; flex-shrink:0;
+}
+.icon-btn:active{ background:var(--gray); }
+.ex-edit-card{
+  background:#f7f7f7; border:2px solid var(--gray); border-radius:14px; padding:14px; margin-bottom:14px;
+}
+.opt-row{ display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+.opt-row input[type=text]{ margin-bottom:0; }
+.opt-row .pick{ flex-shrink:0; width:40px; height:40px; }
+.pill-tag{ display:inline-block; background:var(--blue); color:#fff; font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px; }
+.prog-bar-mini{ height:12px; background:var(--gray); border-radius:8px; overflow:hidden; margin-top:6px; }
+.prog-bar-mini > div{ height:100%; border-radius:8px; }
+
+.empty{ text-align:center; color:var(--gray-d); padding:40px 20px; }
+.empty .em{ font-size:48px; }
+
+/* Painel de geração por IA */
+.ia-panel{ background:#f6effc; border:2px solid #e3d1f5; border-radius:16px; padding:14px; margin:14px 0; }
+.ia-head{ display:flex; align-items:center; justify-content:space-between; }
+.ia-head b{ font-size:15px; color:#7d3c98; }
+.ia-erro{ background:#ffdfe0; color:#c0392b; border-radius:10px; padding:10px 12px; font-size:13px; font-weight:600; margin-bottom:10px; }
+.ia-loading{ display:flex; align-items:center; justify-content:center; gap:10px; font-weight:800; color:#7d3c98; padding:14px 0; font-size:16px; }
+.ia-spinner{ width:22px; height:22px; border:3px solid #e3d1f5; border-top-color:#9b59b6; border-radius:50%; display:inline-block; animation:spin .8s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+/* divisor seção professor */
+.sec-title{ font-size:13px; font-weight:800; color:var(--gray-d); text-transform:uppercase; margin:18px 0 8px; letter-spacing:.5px; }
+
+/* ---------- 6. CONFETE ---------- */
+.confetti{ position:absolute; top:-20px; width:10px; height:16px; opacity:.9; animation:fall linear forwards; z-index:5; }
+
+/* ---------- 7. MASCOTE ---------- */
+.mascot{ width:120px; height:120px; }
+.mascot.bounce{ animation:bounce 1s infinite; }
+.mascot-sm{ width:60px; height:60px; }
+
+/* badge flutuante (toast) */
+.toast{
+  position:fixed; left:50%; transform:translateX(-50%); bottom:30px;
+  background:#3c3c3c; color:#fff; padding:12px 20px; border-radius:30px;
+  font-weight:700; font-size:14px; z-index:200; opacity:0; transition:opacity .3s, transform .3s;
+  pointer-events:none; max-width:90%; text-align:center;
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(-6px); }
+
+/* modal senha */
+.modal-overlay{
+  position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:100;
+  display:none; align-items:center; justify-content:center; padding:24px;
+}
+.modal-overlay.show{ display:flex; }
+.modal{
+  background:#fff; border-radius:20px; padding:24px; width:100%; max-width:380px; animation:popIn .3s ease;
+}
+.modal h3{ margin-bottom:14px; text-align:center; }
+
+/* ---------- 8. ANIMAÇÕES ---------- */
+@keyframes fadeIn{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;} }
+@keyframes popIn{ from{opacity:0; transform:scale(.85);} to{opacity:1; transform:scale(1);} }
+@keyframes bounce{ 0%,100%{transform:translateY(0);} 50%{transform:translateY(-12px);} }
+@keyframes fall{ to{ transform:translateY(110vh) rotate(720deg); opacity:0; } }
+@keyframes shake{ 0%,100%{transform:translateX(0);} 25%{transform:translateX(-8px);} 75%{transform:translateX(8px);} }
+.shake{ animation:shake .4s; }
+@keyframes pop{ 0%{transform:scale(.6);opacity:0;} 60%{transform:scale(1.1);} 100%{transform:scale(1);opacity:1;} }
+.pop{ animation:pop .4s; }
+</style>
+</head>
+<body>
+<div id="app"><!-- telas injetadas via JS --></div>
+<div class="toast" id="toast"></div>
+
+<!-- Modal senha do professor -->
+<div class="modal-overlay" id="pwModal">
+  <div class="modal">
+    <h3>🔒 Área do Professor</h3>
+    <p style="text-align:center;color:#777;margin-bottom:14px;font-size:14px">Digite a senha para acessar.</p>
+    <input type="password" id="pwInput" placeholder="Senha" inputmode="text">
+    <button class="btn" onclick="App.checkPassword()">Entrar</button>
+    <button class="btn gray" style="margin-top:10px" onclick="App.closePwModal()">Cancelar</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   ESTUDAMAIS — JavaScript
+   Seções:
+   A) DADOS (disciplinas, conteúdo inicial, storage)
+   B) ESTADO & UTILITÁRIOS
+   C) GAMIFICAÇÃO (XP, vidas, streak, níveis)
+   D) UI DO ALUNO (home, lições, conteúdo, exercícios, celebração)
+   E) UI DO PROFESSOR (login, lições, exercícios, progresso)
+   F) INICIALIZAÇÃO
+   ============================================================ */
+(function(){
+"use strict";
+
+/* ============================================================
+   A) DADOS
+   ============================================================ */
+const PASSWORD = "professor123";
+const STORAGE_KEY = "estudamais_dados_v2";
+const PROFILE_KEY = "estudamais_perfil_v1";
+const IA_KEY = "estudamais_ia_v1";
+
+// Configuração da geração por IA (Groq, gratuito). Salva em localStorage.
+const IA_MODELO = "llama-3.1-8b-instant";
+const IA_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+let IA = { apiKey:"", modo:"substituir" }; // modo: substituir | acumular
+function loadIA(){
+  try{
+    const r=localStorage.getItem(IA_KEY);
+    if(r){ const o=JSON.parse(r); IA.apiKey=o.apiKey||""; IA.modo=o.modo||"substituir"; return; }
+  }catch(e){}
+  // primeira execução: cria a chave já com valores padrão (vazios)
+  saveIA();
+}
+function saveIA(){ try{ localStorage.setItem(IA_KEY, JSON.stringify(IA)); }catch(e){} }
+
+// Definição estática das disciplinas: id, nome, ícone (emoji), cor temática
+const SUBJECTS = [
+  { id:"mat", nome:"Matemática", icon:"➗", cor:"#ff6b6b" },
+  { id:"por", nome:"Português",  icon:"📚", cor:"#1cb0f6" },
+  { id:"art", nome:"Artes",      icon:"🎨", cor:"#ff7eb9" },
+  { id:"fil", nome:"Filosofia",  icon:"🦉", cor:"#9b59b6" },
+  { id:"red", nome:"Redação",    icon:"✏️", cor:"#ffa502" },
+  { id:"geo", nome:"Geografia",  icon:"🌎", cor:"#2ed573" },
+  { id:"his", nome:"História",   icon:"🏛️", cor:"#e58e26" },
+  { id:"cie", nome:"Ciências",   icon:"🔬", cor:"#00b894" },
+  { id:"ing", nome:"Inglês",     icon:"🇬🇧", cor:"#5352ed" },
+];
+
+// Conteúdo inicial de exemplo — 1 lição por disciplina com 3 exercícios.
+// tipos de exercício: "mc" (múltipla escolha), "vf" (verdadeiro/falso), "fill" (lacuna)
+function seedData(){
+  return {
+    mat:[ { id:uid(), titulo:"Frações Simples", texto:
+"Uma fração representa partes de um inteiro. 🍕\n\nNuma fração como 1/2 (um meio):\n• O número de baixo (denominador) mostra em quantas partes iguais o inteiro foi dividido.\n• O número de cima (numerador) mostra quantas dessas partes nós pegamos.\n\nExemplo: se uma pizza é dividida em 4 pedaços iguais e você come 1, você comeu 1/4 da pizza.\n\nFrações iguais a um inteiro: 4/4 = 1 inteiro.\nMetade: 1/2. Um quarto: 1/4. Três quartos: 3/4.",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"Uma pizza foi dividida em 8 pedaços iguais. João comeu 3. Que fração ele comeu?", opcoes:["3/8","8/3","3/5","1/8"], correta:0 },
+        { id:uid(), tipo:"vf", enunciado:"A fração 2/4 é igual a 1/2 (metade).", opcoes:["Verdadeiro","Falso"], correta:0 },
+        { id:uid(), tipo:"fill", enunciado:"Na fração 5/6, o número 6 é chamado de ____.", resposta:"denominador" },
+      ] },
+      { id:uid(), titulo:"Multiplicação e Tabuada", texto:
+"Multiplicar é somar o mesmo número várias vezes. ✖️\n\nExemplo: 3 × 4 significa somar o 3 quatro vezes: 3 + 3 + 3 + 3 = 12.\n\nA tabuada nos ajuda a multiplicar mais rápido. Vale a pena decorar!\n• 2 × 5 = 10\n• 6 × 7 = 42\n• 9 × 9 = 81\n\nDica: multiplicar por 10 é só colocar um zero no final: 8 × 10 = 80.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Quanto é 7 × 8?", opcoes:["54","56","48","64"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"Quanto é 6 × 9?", opcoes:["54","56","45","63"], correta:0 },
+          { id:uid(), tipo:"fill", enunciado:"Multiplicando por 10: 12 × 10 = ____.", resposta:"120" },
+        ] },
+      { id:uid(), titulo:"Formas Geométricas", texto:
+"As formas geométricas estão por toda parte! 📐\n\n• TRIÂNGULO: tem 3 lados.\n• QUADRADO: tem 4 lados iguais.\n• RETÂNGULO: tem 4 lados, sendo 2 maiores e 2 menores.\n• CÍRCULO: é redondo e não tem lados.\n\nO PERÍMETRO é a soma da medida de todos os lados de uma forma.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Quantos lados tem um triângulo?", opcoes:["2","3","4","5"], correta:1 },
+          { id:uid(), tipo:"vf", enunciado:"O quadrado tem 4 lados iguais.", opcoes:["Verdadeiro","Falso"], correta:0 },
+          { id:uid(), tipo:"mc", enunciado:"Qual forma é redonda e não tem lados?", opcoes:["Quadrado","Triângulo","Círculo","Retângulo"], correta:2 },
+        ] } ],
+    por:[ { id:uid(), titulo:"Classes Gramaticais", texto:
+"As palavras se organizam em classes gramaticais. ✍️\n\n• SUBSTANTIVO: dá nome aos seres, coisas e lugares (gato, escola, Maria).\n• ADJETIVO: indica uma característica (bonito, rápido, azul).\n• VERBO: indica ação ou estado (correr, ser, estudar).\n• ARTIGO: vem antes do substantivo (o, a, os, as, um, uma).\n\nExemplo: 'O gato preto correu.'\n- O = artigo, gato = substantivo, preto = adjetivo, correu = verbo.",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"Na frase 'A menina alegre cantou', qual palavra é um ADJETIVO?", opcoes:["A","menina","alegre","cantou"], correta:2 },
+        { id:uid(), tipo:"mc", enunciado:"Qual palavra é um VERBO?", opcoes:["bonito","pular","mesa","rápido"], correta:1 },
+        { id:uid(), tipo:"vf", enunciado:"A palavra 'cachorro' é um substantivo.", opcoes:["Verdadeiro","Falso"], correta:0 },
+      ] },
+      { id:uid(), titulo:"Pontuação", texto:
+"Os sinais de pontuação organizam o texto e dão sentido às frases. ✍️\n\n• PONTO FINAL (.) termina uma frase.\n• PONTO DE INTERROGAÇÃO (?) indica uma pergunta.\n• PONTO DE EXCLAMAÇÃO (!) mostra emoção ou surpresa.\n• VÍRGULA (,) faz uma pequena pausa.\n\nExemplo: Você vai à festa? Que legal!",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Qual sinal usamos no fim de uma pergunta?", opcoes:["Ponto final","Interrogação","Exclamação","Vírgula"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"Em 'Que dia lindo!', qual sinal mostra emoção?", opcoes:["Vírgula","Ponto final","Exclamação","Dois-pontos"], correta:2 },
+          { id:uid(), tipo:"vf", enunciado:"A vírgula serve para fazer uma pequena pausa na frase.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] },
+      { id:uid(), titulo:"Sinônimos e Antônimos", texto:
+"Algumas palavras têm sentidos parecidos ou opostos. 📚\n\n• SINÔNIMOS: palavras com significado parecido (alegre = feliz; bonito = belo).\n• ANTÔNIMOS: palavras com significado oposto (alto × baixo; quente × frio).\n\nConhecer sinônimos ajuda a escrever sem repetir as mesmas palavras!",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Qual é um SINÔNIMO de 'feliz'?", opcoes:["Triste","Alegre","Cansado","Bravo"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"Qual é o ANTÔNIMO de 'quente'?", opcoes:["Morno","Frio","Calor","Sol"], correta:1 },
+          { id:uid(), tipo:"fill", enunciado:"Palavras de significado oposto são chamadas de ____.", resposta:"antônimos" },
+        ] } ],
+    cie:[ { id:uid(), titulo:"Sistema Solar", texto:
+"O Sistema Solar é formado pelo Sol e tudo que gira ao seu redor. ☀️🪐\n\n• O SOL é uma estrela, está no centro e nos dá luz e calor.\n• Existem 8 PLANETAS: Mercúrio, Vênus, Terra, Marte, Júpiter, Saturno, Urano e Netuno.\n• A TERRA é o nosso planeta, o único conhecido com vida.\n• Júpiter é o maior planeta. Saturno é famoso pelos seus anéis.\n\nOs planetas fazem o movimento de TRANSLAÇÃO (giram ao redor do Sol) e de ROTAÇÃO (giram em torno de si mesmos).",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"Quantos planetas existem no Sistema Solar?", opcoes:["7","8","9","10"], correta:1 },
+        { id:uid(), tipo:"vf", enunciado:"O Sol é um planeta.", opcoes:["Verdadeiro","Falso"], correta:1 },
+        { id:uid(), tipo:"fill", enunciado:"O movimento da Terra ao redor do Sol se chama ____.", resposta:"translação" },
+      ] },
+      { id:uid(), titulo:"Os Estados da Água", texto:
+"A água pode existir em três estados físicos. 💧\n\n• SÓLIDO: água congelada (gelo). 🧊\n• LÍQUIDO: a água como bebemos.\n• GASOSO: vapor de água.\n\nQuando a água esquenta, vira vapor (evaporação). Quando esfria muito, vira gelo (solidificação).",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Em que estado físico está o gelo?", opcoes:["Líquido","Sólido","Gasoso","Nenhum"], correta:1 },
+          { id:uid(), tipo:"fill", enunciado:"Quando a água ferve e vira vapor, ocorre a ____.", resposta:"evaporação" },
+          { id:uid(), tipo:"vf", enunciado:"A água pode existir em três estados: sólido, líquido e gasoso.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] },
+      { id:uid(), titulo:"Plantas e Fotossíntese", texto:
+"As plantas produzem seu próprio alimento. 🌱\n\nNa FOTOSSÍNTESE, as plantas usam:\n• Luz do Sol ☀️\n• Água 💧\n• Gás carbônico do ar\n\nE produzem alimento (energia) e liberam OXIGÊNIO, o gás que respiramos.\n\nPartes da planta: raiz, caule, folhas, flores e frutos.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Qual gás as plantas liberam na fotossíntese?", opcoes:["Gás carbônico","Oxigênio","Fumaça","Vapor sujo"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"Qual parte da planta fica embaixo da terra?", opcoes:["Folha","Flor","Raiz","Fruto"], correta:2 },
+          { id:uid(), tipo:"vf", enunciado:"As plantas precisam da luz do Sol para fazer fotossíntese.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] } ],
+    geo:[ { id:uid(), titulo:"Regiões do Brasil", texto:
+"O Brasil é dividido em 5 grandes regiões. 🌎\n\n• NORTE: maior região, abriga a Floresta Amazônica.\n• NORDESTE: tem praias famosas e o clima semiárido no sertão.\n• CENTRO-OESTE: onde fica Brasília, a capital do país, e o Pantanal.\n• SUDESTE: região mais populosa (São Paulo, Rio de Janeiro, Minas Gerais).\n• SUL: região mais fria, com influência europeia.\n\nCada região tem culturas, climas e paisagens diferentes!",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"Em qual região fica Brasília, a capital do Brasil?", opcoes:["Sudeste","Nordeste","Centro-Oeste","Sul"], correta:2 },
+        { id:uid(), tipo:"mc", enunciado:"Qual região abriga a Floresta Amazônica?", opcoes:["Norte","Sul","Sudeste","Nordeste"], correta:0 },
+        { id:uid(), tipo:"vf", enunciado:"O Brasil é dividido em 5 regiões.", opcoes:["Verdadeiro","Falso"], correta:0 },
+      ] },
+      { id:uid(), titulo:"Pontos Cardeais", texto:
+"Os pontos cardeais nos ajudam a nos localizar. 🧭\n\nSão quatro:\n• NORTE (N)\n• SUL (S)\n• LESTE (L) — onde o Sol nasce 🌅\n• OESTE (O) — onde o Sol se põe 🌇\n\nA bússola é um instrumento que sempre aponta para o Norte.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Em qual direção o Sol nasce?", opcoes:["Norte","Sul","Leste","Oeste"], correta:2 },
+          { id:uid(), tipo:"fill", enunciado:"O instrumento que sempre aponta para o Norte é a ____.", resposta:"bússola" },
+          { id:uid(), tipo:"vf", enunciado:"O Sol se põe no Oeste.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] },
+      { id:uid(), titulo:"Campo e Cidade", texto:
+"Existem dois tipos principais de paisagem onde as pessoas vivem. 🏙️🌾\n\n• ZONA RURAL (campo): mais natureza, plantações e criação de animais. Produz alimentos.\n• ZONA URBANA (cidade): muitas casas, prédios, ruas, comércio e trânsito.\n\nO campo e a cidade dependem um do outro: a cidade compra os alimentos do campo.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Onde encontramos mais plantações e criação de animais?", opcoes:["Cidade","Campo","Praia","Deserto"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"A zona com muitos prédios e ruas é chamada de zona...", opcoes:["Rural","Urbana","Verde","Marinha"], correta:1 },
+          { id:uid(), tipo:"vf", enunciado:"O campo produz boa parte dos alimentos que comemos.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] } ],
+    his:[ { id:uid(), titulo:"Independência do Brasil", texto:
+"A Independência do Brasil aconteceu em 7 de setembro de 1822. 🇧🇷\n\n• Até então, o Brasil era uma colônia de Portugal.\n• Dom Pedro I proclamou a independência às margens do rio Ipiranga, em São Paulo.\n• A famosa frase foi: 'Independência ou Morte!'\n• Esse momento ficou conhecido como o 'Grito do Ipiranga'.\n\nPor isso comemoramos o feriado da Independência todo dia 7 de setembro.",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"Quem proclamou a Independência do Brasil?", opcoes:["Dom Pedro II","Dom Pedro I","Tiradentes","Getúlio Vargas"], correta:1 },
+        { id:uid(), tipo:"fill", enunciado:"A Independência do Brasil aconteceu no ano de ____.", resposta:"1822" },
+        { id:uid(), tipo:"vf", enunciado:"Antes da independência, o Brasil era colônia de Portugal.", opcoes:["Verdadeiro","Falso"], correta:0 },
+      ] },
+      { id:uid(), titulo:"Chegada dos Portugueses", texto:
+"Os portugueses chegaram ao Brasil em 22 de abril de 1500. ⛵\n\n• A expedição era comandada por Pedro Álvares Cabral.\n• Eles chegaram à região onde hoje fica a Bahia.\n• Aqui já viviam os povos INDÍGENAS havia milhares de anos.\n\nPor isso dizemos que os portugueses 'chegaram' ao Brasil, pois a terra já era habitada.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Quem comandou a expedição que chegou ao Brasil em 1500?", opcoes:["Dom Pedro I","Pedro Álvares Cabral","Cristóvão Colombo","Tiradentes"], correta:1 },
+          { id:uid(), tipo:"fill", enunciado:"Os portugueses chegaram ao Brasil no ano de ____.", resposta:"1500" },
+          { id:uid(), tipo:"vf", enunciado:"Quando os portugueses chegaram, o Brasil já era habitado pelos povos indígenas.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] },
+      { id:uid(), titulo:"Linha do Tempo", texto:
+"A História estuda os acontecimentos ao longo do tempo. ⏳\n\n• Usamos a LINHA DO TEMPO para organizar os fatos em ordem.\n• 100 anos formam um SÉCULO.\n• 10 anos formam uma DÉCADA.\n• Fatos do PASSADO já aconteceram; o PRESENTE é agora.\n\nFontes históricas (fotos, documentos, objetos antigos) nos ajudam a conhecer o passado.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Quantos anos tem um século?", opcoes:["10","50","100","1000"], correta:2 },
+          { id:uid(), tipo:"fill", enunciado:"Um período de 10 anos é chamado de ____.", resposta:"década" },
+          { id:uid(), tipo:"vf", enunciado:"A linha do tempo organiza os acontecimentos em ordem.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] } ],
+    ing:[ { id:uid(), titulo:"Saudações Básicas", texto:
+"Vamos aprender a cumprimentar em inglês! 🇬🇧\n\n• Hello / Hi = Olá / Oi\n• Good morning = Bom dia\n• Good afternoon = Boa tarde\n• Good night = Boa noite\n• How are you? = Como você está?\n• Thank you = Obrigado(a)\n• Goodbye / Bye = Tchau\n\nPratique cumprimentando seus amigos em inglês!",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"Como se diz 'Bom dia' em inglês?", opcoes:["Good night","Good morning","Goodbye","Hello"], correta:1 },
+        { id:uid(), tipo:"mc", enunciado:"O que significa 'Thank you'?", opcoes:["Por favor","Tchau","Obrigado","Olá"], correta:2 },
+        { id:uid(), tipo:"fill", enunciado:"A saudação 'Hello' significa ____ em português.", resposta:"olá" },
+      ] },
+      { id:uid(), titulo:"Numbers (Números)", texto:
+"Vamos aprender os números de 1 a 10 em inglês! 🔢\n\n• 1 = one\n• 2 = two\n• 3 = three\n• 4 = four\n• 5 = five\n• 6 = six\n• 7 = seven\n• 8 = eight\n• 9 = nine\n• 10 = ten",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Como se escreve o número 3 em inglês?", opcoes:["two","three","four","tree"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"Quanto é 'five' em português?", opcoes:["4","5","6","9"], correta:1 },
+          { id:uid(), tipo:"fill", enunciado:"O número 10 em inglês é ____.", resposta:"ten" },
+        ] },
+      { id:uid(), titulo:"Colors (Cores)", texto:
+"As cores em inglês! 🎨\n\n• red = vermelho\n• blue = azul\n• green = verde\n• yellow = amarelo\n• black = preto\n• white = branco\n\nExemplo: The sky is blue. (O céu é azul.)",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Qual cor é 'red'?", opcoes:["Azul","Verde","Vermelho","Preto"], correta:2 },
+          { id:uid(), tipo:"mc", enunciado:"Como se diz 'amarelo' em inglês?", opcoes:["yellow","green","white","blue"], correta:0 },
+          { id:uid(), tipo:"fill", enunciado:"A cor 'white' significa ____ em português.", resposta:"branco" },
+        ] } ],
+    art:[ { id:uid(), titulo:"Cores Primárias", texto:
+"As cores primárias são as cores que não podem ser formadas pela mistura de outras. 🎨\n\nSão elas:\n• VERMELHO ❤️\n• AZUL 💙\n• AMARELO 💛\n\nMisturando as cores primárias, criamos as cores SECUNDÁRIAS:\n• Azul + Amarelo = Verde 💚\n• Vermelho + Amarelo = Laranja 🧡\n• Vermelho + Azul = Roxo 💜",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"Qual destas é uma cor PRIMÁRIA?", opcoes:["Verde","Laranja","Azul","Roxo"], correta:2 },
+        { id:uid(), tipo:"mc", enunciado:"Azul + Amarelo formam qual cor?", opcoes:["Verde","Roxo","Laranja","Rosa"], correta:0 },
+        { id:uid(), tipo:"vf", enunciado:"O verde é uma cor primária.", opcoes:["Verdadeiro","Falso"], correta:1 },
+      ] },
+      { id:uid(), titulo:"Cores Quentes e Frias", texto:
+"As cores transmitem sensações diferentes. 🎨\n\n• CORES QUENTES: vermelho, laranja e amarelo. Lembram o Sol e o fogo, passam energia.\n• CORES FRIAS: azul, verde e roxo. Lembram a água e a natureza, passam calma.\n\nOs artistas escolhem as cores para transmitir emoções nas obras.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Qual destas é uma cor QUENTE?", opcoes:["Azul","Vermelho","Verde","Roxo"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"Qual destas é uma cor FRIA?", opcoes:["Laranja","Amarelo","Azul","Vermelho"], correta:2 },
+          { id:uid(), tipo:"vf", enunciado:"As cores frias lembram a água e passam sensação de calma.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] },
+      { id:uid(), titulo:"Artistas e Obras", texto:
+"A arte tem muitas formas de se expressar! 🖼️\n\n• PINTURA: usar tintas para criar imagens.\n• ESCULTURA: criar formas em 3D com pedra, argila ou madeira.\n• DESENHO: usar lápis e canetas.\n\nTarsila do Amaral foi uma famosa pintora brasileira. A obra 'Abaporu' é muito conhecida.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Qual arte usa pedra, argila ou madeira para criar formas em 3D?", opcoes:["Pintura","Escultura","Desenho","Música"], correta:1 },
+          { id:uid(), tipo:"mc", enunciado:"Quem pintou a famosa obra 'Abaporu'?", opcoes:["Tarsila do Amaral","Romero Britto","Portinari","Monet"], correta:0 },
+          { id:uid(), tipo:"vf", enunciado:"A pintura usa tintas para criar imagens.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] } ],
+    fil:[ { id:uid(), titulo:"Respeito e Convivência", texto:
+"Filosofia também é pensar sobre como viver bem com os outros. 🦉\n\n• RESPEITO é tratar as pessoas como gostaríamos de ser tratados.\n• EMPATIA é tentar entender o que o outro sente.\n• Na escola, conviver bem significa ouvir os colegas, esperar a vez de falar e ajudar quem precisa.\n• Cada pessoa é diferente, e isso é o que torna o mundo interessante!\n\nQuando respeitamos os outros, todos vivem mais felizes juntos.",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"O que é EMPATIA?", opcoes:["Brigar com os colegas","Tentar entender o que o outro sente","Ignorar as pessoas","Falar sem parar"], correta:1 },
+        { id:uid(), tipo:"vf", enunciado:"Respeitar é tratar os outros como gostaríamos de ser tratados.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        { id:uid(), tipo:"mc", enunciado:"Qual atitude mostra boa convivência na escola?", opcoes:["Esperar a vez de falar","Empurrar os colegas","Não ouvir ninguém","Gritar na sala"], correta:0 },
+      ] },
+      { id:uid(), titulo:"O Pensar e as Perguntas", texto:
+"A Filosofia começa com a curiosidade e as PERGUNTAS. 🤔\n\n• Filosofia vem do grego e significa 'amor à sabedoria'.\n• Filósofos são pessoas que gostam de pensar e fazer perguntas sobre o mundo.\n• Perguntar 'por quê?' nos ajuda a entender melhor as coisas.\n\nNão existe pergunta boba: toda pergunta ajuda a aprender!",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"O que significa a palavra 'Filosofia'?", opcoes:["Amor à sabedoria","Medo do escuro","Estudo dos números","Arte de pintar"], correta:0 },
+          { id:uid(), tipo:"vf", enunciado:"Fazer perguntas nos ajuda a entender melhor o mundo.", opcoes:["Verdadeiro","Falso"], correta:0 },
+          { id:uid(), tipo:"mc", enunciado:"O que mais marca o pensamento filosófico?", opcoes:["Decorar tudo","Fazer perguntas","Nunca pensar","Copiar os outros"], correta:1 },
+        ] },
+      { id:uid(), titulo:"Verdade e Honestidade", texto:
+"Dizer a VERDADE é muito importante na convivência. 🦉\n\n• A verdade gera CONFIANÇA entre as pessoas.\n• A mentira pode machucar e quebrar a confiança.\n• Ser HONESTO é agir de acordo com a verdade, mesmo quando é difícil.\n\nQuando erramos, o melhor é assumir e tentar consertar.",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"O que a verdade gera entre as pessoas?", opcoes:["Medo","Confiança","Mentira","Briga"], correta:1 },
+          { id:uid(), tipo:"vf", enunciado:"Ser honesto é agir de acordo com a verdade.", opcoes:["Verdadeiro","Falso"], correta:0 },
+          { id:uid(), tipo:"mc", enunciado:"Quando cometemos um erro, qual é a melhor atitude?", opcoes:["Esconder","Assumir e consertar","Culpar os outros","Mentir"], correta:1 },
+        ] } ],
+    red:[ { id:uid(), titulo:"Estrutura de Parágrafo", texto:
+"Um bom texto é organizado em PARÁGRAFOS. ✏️\n\nUm parágrafo costuma ter:\n• FRASE INICIAL: apresenta a ideia principal.\n• DESENVOLVIMENTO: explica e dá exemplos sobre a ideia.\n• CONCLUSÃO: fecha a ideia do parágrafo.\n\nDica: cada parágrafo deve falar sobre UMA ideia principal. Ao começar um parágrafo novo, deixamos um pequeno espaço no início da linha (chamado de recuo ou parágrafo).",
+      exercicios:[
+        { id:uid(), tipo:"mc", enunciado:"O que a frase inicial de um parágrafo apresenta?", opcoes:["A ideia principal","Apenas exemplos","A conclusão","O título"], correta:0 },
+        { id:uid(), tipo:"vf", enunciado:"Cada parágrafo deve falar sobre várias ideias diferentes ao mesmo tempo.", opcoes:["Verdadeiro","Falso"], correta:1 },
+        { id:uid(), tipo:"fill", enunciado:"A parte que fecha a ideia do parágrafo se chama ____.", resposta:"conclusão" },
+      ] },
+      { id:uid(), titulo:"Tipos de Texto", texto:
+"Existem vários tipos de texto, cada um com uma função. ✏️\n\n• NARRATIVO: conta uma história (início, meio e fim). Ex: contos e fábulas.\n• DESCRITIVO: descreve como algo ou alguém é.\n• Convite, receita, bilhete e notícia também são tipos de texto!\n\nAntes de escrever, pense: para quem e para quê estou escrevendo?",
+        exercicios:[
+          { id:uid(), tipo:"mc", enunciado:"Que tipo de texto conta uma história com início, meio e fim?", opcoes:["Narrativo","Receita","Bilhete","Lista"], correta:0 },
+          { id:uid(), tipo:"mc", enunciado:"Uma fábula é um exemplo de texto...", opcoes:["Descritivo","Narrativo","Receita","Convite"], correta:1 },
+          { id:uid(), tipo:"vf", enunciado:"O texto descritivo serve para descrever como algo ou alguém é.", opcoes:["Verdadeiro","Falso"], correta:0 },
+        ] },
+      { id:uid(), titulo:"Letra Maiúscula", texto:
+"Algumas regras deixam o texto bem escrito. ✍️\n\n• Começamos toda frase com LETRA MAIÚSCULA.\n• Nomes de pessoas, cidades e países também começam com maiúscula (Ana, Brasil, Recife).\n• Depois do ponto final, a próxima frase começa com maiúscula.\n\nExemplo: Maria mora em São Paulo. Ela gosta de ler.",
+        exercicios:[
+          { id:uid(), tipo:"vf", enunciado:"Toda frase deve começar com letra maiúscula.", opcoes:["Verdadeiro","Falso"], correta:0 },
+          { id:uid(), tipo:"mc", enunciado:"Qual palavra deve começar com letra maiúscula?", opcoes:["casa","brasil","Brasil","correndo"], correta:2 },
+          { id:uid(), tipo:"fill", enunciado:"Depois do ponto final, a próxima frase começa com letra ____.", resposta:"maiúscula" },
+        ] } ],
+  };
+}
+
+/* ============================================================
+   B) ESTADO & UTILITÁRIOS
+   ============================================================ */
+let DATA = {};      // { subjId: [ {id,titulo,texto,exercicios:[...]} ] }
+let PROFILE = {};   // perfil/progresso do aluno
+const app = document.getElementById("app");
+
+function uid(){ return "id" + Math.random().toString(36).slice(2,9) + Date.now().toString(36).slice(-3); }
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function norm(s){ return String(s||"").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[̀-ͯ]/g,""); }
+
+function loadData(){
+  try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ DATA=JSON.parse(raw); return; } }catch(e){}
+  DATA = seedData(); saveData();
+}
+function saveData(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); }catch(e){} }
+
+function defaultProfile(){
+  const p={ nome:"Aluno(a)", xpTotal:0, streak:0, ultimoDia:null, medalhas:[], som:true, disciplinas:{} };
+  SUBJECTS.forEach(s=> p.disciplinas[s.id]={ xp:0, nivel:1, licoesConcluidas:[] });
+  return p;
+}
+function loadProfile(){
+  try{ const raw=localStorage.getItem(PROFILE_KEY); if(raw){ PROFILE=JSON.parse(raw);
+        // garantir estrutura para disciplinas e campos novos (compatibilidade)
+        SUBJECTS.forEach(s=>{ if(!PROFILE.disciplinas[s.id]) PROFILE.disciplinas[s.id]={xp:0,nivel:1,licoesConcluidas:[]}; });
+        if(!Array.isArray(PROFILE.medalhas)) PROFILE.medalhas=[];
+        if(typeof PROFILE.som!=="boolean") PROFILE.som=true;
+        return; } }catch(e){}
+  PROFILE = defaultProfile(); saveProfile();
+}
+function saveProfile(){ try{ localStorage.setItem(PROFILE_KEY, JSON.stringify(PROFILE)); }catch(e){} }
+
+function subjById(id){ return SUBJECTS.find(s=>s.id===id); }
+
+function toast(msg){
+  const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(t._tid); t._tid=setTimeout(()=>t.classList.remove("show"),2200);
+}
+
+// Módulo de ÁUDIO — gera sons via Web Audio API (sem arquivos, funciona offline)
+const Sound = {
+  ctx:null,
+  init(){ // o AudioContext só pode iniciar após um toque do usuário
+    if(this.ctx) return;
+    try{ this.ctx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ this.ctx=null; }
+  },
+  // toca uma nota: freq (Hz), início (s a partir de agora), duração (s), forma de onda, volume
+  tone(freq, delay, dur, type, vol){
+    if(!this.ctx) return;
+    const t0 = this.ctx.currentTime + (delay||0);
+    const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
+    osc.type = type||"sine"; osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(vol||0.2, t0+0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+    osc.connect(gain); gain.connect(this.ctx.destination);
+    osc.start(t0); osc.stop(t0+dur+0.02);
+  },
+  play(notes){ // notes: [ [freq, delay, dur, type?, vol?], ... ]
+    if(!(PROFILE && PROFILE.som)) return;
+    if(this.ctx && this.ctx.state==="suspended") this.ctx.resume();
+    notes.forEach(n=>this.tone(n[0],n[1],n[2],n[3],n[4]));
+  },
+  correct(){ this.play([[660,0,.12,"triangle",.25],[880,.10,.18,"triangle",.25]]); },
+  wrong(){ this.play([[200,0,.18,"sawtooth",.18],[150,.16,.22,"sawtooth",.18]]); },
+  level(){ this.play([[523,0,.12,"square",.2],[659,.12,.12,"square",.2],[784,.24,.12,"square",.2],[1047,.36,.25,"square",.22]]); },
+  celebrate(){ this.play([[523,0,.14,"triangle",.25],[659,.14,.14,"triangle",.25],[784,.28,.14,"triangle",.25],[1047,.42,.3,"triangle",.28]]); },
+  unlock(){ this.play([[784,0,.1,"sine",.22],[1047,.1,.1,"sine",.22],[1319,.2,.22,"sine",.24]]); },
+  click(){ this.play([[440,0,.05,"sine",.12]]); }
+};
+
+// Mascote em SVG — "Estrelinha", uma estrela alegre (distinta da coruja do Duolingo)
+function mascot(cls){
+  return `<svg class="mascot ${cls||''}" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <polygon points="60,10 71.8,43.8 107.6,44.6 79,66.2 89.4,100.5 60,80 30.6,100.5 41,66.2 12.4,44.6 48.2,43.8"
+             fill="#ffd23f" stroke="#f7a800" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="50" cy="55" r="5" fill="#3c3c3c"/><circle cx="70" cy="55" r="5" fill="#3c3c3c"/>
+    <circle cx="51.7" cy="53.3" r="1.7" fill="#fff"/><circle cx="71.7" cy="53.3" r="1.7" fill="#fff"/>
+    <path d="M51 63 Q60 72 69 63" stroke="#3c3c3c" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <circle cx="43" cy="62" r="4" fill="#ff8fab" opacity=".75"/>
+    <circle cx="77" cy="62" r="4" fill="#ff8fab" opacity=".75"/>
+  </svg>`;
+}
+
+/* ============================================================
+   C) GAMIFICAÇÃO
+   ============================================================ */
+const XP_POR_NIVEL = 50;       // XP necessário por nível em cada disciplina
+const XP_POR_ACERTO = 10;
+const XP_BONUS_LICAO = 20;     // bônus ao concluir lição
+
+function nivelDe(xp){ return Math.floor(xp / XP_POR_NIVEL) + 1; }
+function xpNoNivel(xp){ return xp % XP_POR_NIVEL; }
+
+// Atualiza streak diário com base na data
+function atualizarStreak(){
+  const hoje = new Date().toDateString();
+  if(PROFILE.ultimoDia === hoje) return; // já contado hoje
+  const ontem = new Date(Date.now()-86400000).toDateString();
+  if(PROFILE.ultimoDia === ontem) PROFILE.streak += 1;
+  else PROFILE.streak = 1;
+  PROFILE.ultimoDia = hoje;
+  saveProfile();
+}
+
+// Concede recompensas ao concluir uma lição
+function concederRecompensa(subjId, lessonId, acertos){
+  const d = PROFILE.disciplinas[subjId];
+  const ganho = acertos*XP_POR_ACERTO + XP_BONUS_LICAO;
+  const nivelAntes = nivelDe(d.xp);
+  d.xp += ganho;
+  PROFILE.xpTotal += ganho;
+  if(d.licoesConcluidas.indexOf(lessonId)<0) d.licoesConcluidas.push(lessonId);
+  d.nivel = nivelDe(d.xp);
+  atualizarStreak();
+  saveProfile();
+  return { ganho, subiuNivel: nivelDe(d.xp)>nivelAntes, nivel:d.nivel };
+}
+
+// --- MEDALHAS / CONQUISTAS ---
+// check(p, ctx) recebe o perfil e o contexto da última lição ({perfeito, disciplina})
+const ACHIEVEMENTS = [
+  { id:"first",     icon:"🌟", titulo:"Primeiros Passos", desc:"Conclua sua primeira lição",            check:(p,s)=> s.totalConcl>=1 },
+  { id:"l5",        icon:"📚", titulo:"Estudioso",        desc:"Conclua 5 lições no total",             check:(p,s)=> s.totalConcl>=5 },
+  { id:"l15",       icon:"🎓", titulo:"Sabe-Tudo",        desc:"Conclua 15 lições no total",            check:(p,s)=> s.totalConcl>=15 },
+  { id:"perfeito",  icon:"🎯", titulo:"Nota Mil",         desc:"Acerte todos os exercícios de uma lição", check:(p,s,c)=> !!c.perfeito },
+  { id:"xp100",     icon:"💯", titulo:"Cem de XP",        desc:"Alcance 100 XP no total",               check:(p)=> p.xpTotal>=100 },
+  { id:"xp500",     icon:"🚀", titulo:"Foguete",          desc:"Alcance 500 XP no total",               check:(p)=> p.xpTotal>=500 },
+  { id:"streak3",   icon:"🔥", titulo:"Pegando Fogo",     desc:"Mantenha uma ofensiva de 3 dias",       check:(p)=> p.streak>=3 },
+  { id:"streak7",   icon:"⚡", titulo:"Imparável",         desc:"Mantenha uma ofensiva de 7 dias",       check:(p)=> p.streak>=7 },
+  { id:"nivel5",    icon:"🏆", titulo:"Especialista",     desc:"Chegue ao nível 5 em uma disciplina",   check:(p,s)=> s.nivelMax>=5 },
+  { id:"explorador",icon:"🗺️", titulo:"Explorador",       desc:"Conclua lições em 3 disciplinas",       check:(p,s)=> s.discComConcl>=3 },
+  { id:"mestre",    icon:"👑", titulo:"Grande Mestre",    desc:"Conclua ao menos 1 lição em todas as 9 disciplinas", check:(p,s)=> s.discComConcl>=SUBJECTS.length },
+];
+
+// Estatísticas agregadas do progresso (usadas pelas medalhas e telas)
+function statsProgresso(){
+  let totalConcl=0, discComConcl=0, nivelMax=1;
+  SUBJECTS.forEach(s=>{
+    const d=PROFILE.disciplinas[s.id];
+    const f=d.licoesConcluidas.filter(id=>(DATA[s.id]||[]).some(l=>l.id===id)).length;
+    totalConcl+=f; if(f>0) discComConcl++; if(d.nivel>nivelMax) nivelMax=d.nivel;
+  });
+  return { totalConcl, discComConcl, nivelMax };
+}
+
+// Verifica e desbloqueia novas medalhas. ctx={perfeito:bool}. Retorna as recém-conquistadas.
+function verificarMedalhas(ctx){
+  ctx=ctx||{}; const s=statsProgresso(); const novas=[];
+  ACHIEVEMENTS.forEach(a=>{
+    if(PROFILE.medalhas.indexOf(a.id)>=0) return;
+    if(a.check(PROFILE, s, ctx)){ PROFILE.medalhas.push(a.id); novas.push(a); }
+  });
+  if(novas.length) saveProfile();
+  return novas;
+}
+
+/* ============================================================
+   D) UI DO ALUNO
+   ============================================================ */
+const State = { tela:"home", subj:null, lesson:null };
+// estado de uma sessão de exercícios
+let Sess = null;
+
+function render(){
+  switch(State.tela){
+    case "home":      renderHome(); break;
+    case "lessons":   renderLessons(); break;
+    case "content":   renderContent(); break;
+    case "exercise":  renderExercise(); break;
+    case "done":      renderDone(); break;
+    case "profile":   renderProfile(); break;
+    case "teacher":   renderTeacher(); break;
+    default: renderHome();
+  }
+}
+
+function goHome(){ State.tela="home"; render(); }
+
+// ----- HOME: seleção de disciplinas -----
+function renderHome(){
+  atualizarStreak();
+  const totalLicoes = SUBJECTS.reduce((a,s)=>a+(DATA[s.id]?DATA[s.id].length:0),0);
+  const concl = SUBJECTS.reduce((a,s)=>a+PROFILE.disciplinas[s.id].licoesConcluidas.length,0);
+
+  let cards = SUBJECTS.map(s=>{
+    const d = PROFILE.disciplinas[s.id];
+    const total = (DATA[s.id]||[]).length;
+    const feitas = d.licoesConcluidas.filter(id=> (DATA[s.id]||[]).some(l=>l.id===id)).length;
+    return `<div class="subj-card" style="background:${s.cor}" onclick="App.openSubject('${s.id}')">
+      <span class="lvl-badge">Nv ${d.nivel}</span>
+      <div class="icon">${s.icon}</div>
+      <div>
+        <div class="name">${esc(s.nome)}</div>
+        <div class="meta">${feitas}/${total} ${total===1?'lição':'lições'} • ${d.xp} XP</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  app.innerHTML = `<div class="screen active">
+    <div class="home-header">
+      <div style="display:flex;align-items:center;gap:12px">
+        ${mascot('bounce')}
+        <div style="flex:1">
+          <div class="greeting">Olá, ${esc(PROFILE.nome)}! 👋</div>
+          <div class="sub">Pronto para aprender hoje?</div>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-pill"><div class="v">🔥 ${PROFILE.streak}</div><div class="l">Ofensiva</div></div>
+        <div class="stat-pill"><div class="v">⭐ ${PROFILE.xpTotal}</div><div class="l">XP Total</div></div>
+        <div class="stat-pill"><div class="v">✅ ${concl}</div><div class="l">Lições</div></div>
+      </div>
+    </div>
+    <div class="content">
+      <h2 style="margin-bottom:12px">Escolha uma disciplina</h2>
+      <div class="subj-grid">${cards}</div>
+      <button class="btn gray" style="margin-top:18px" onclick="App.openProfile()">👤 Meu Perfil</button>
+      <button class="btn gray" style="margin-top:10px" onclick="App.openPwModal()">👩‍🏫 Área do Professor</button>
+      <p style="text-align:center;color:#bbb;font-size:12px;margin-top:16px">EstudaMais • ${totalLicoes} lições disponíveis</p>
+    </div>
+  </div>`;
+}
+
+// ----- LISTA DE LIÇÕES de uma disciplina -----
+function openSubject(id){ State.subj=id; State.tela="lessons"; render(); }
+function renderLessons(){
+  const s = subjById(State.subj); const d=PROFILE.disciplinas[s.id];
+  const licoes = DATA[s.id]||[];
+  let list;
+  if(licoes.length===0){
+    list = `<div class="empty"><div class="em">📭</div><p>Nenhuma lição cadastrada ainda.<br>Peça ao professor para adicionar!</p></div>`;
+  } else {
+    list = licoes.map((l,i)=>{
+      const feita = d.licoesConcluidas.indexOf(l.id)>=0;
+      return `<div class="card" onclick="App.openLesson('${l.id}')">
+        <div class="lesson-item">
+          <div class="bubble ${feita?'done':''}" style="background:${s.cor}">${feita?'⭐':(i+1)}</div>
+          <div class="info">
+            <div class="t">${esc(l.titulo)}</div>
+            <div class="d">${l.exercicios.length} ${l.exercicios.length===1?'exercício':'exercícios'} ${feita?'• Concluída ✅':''}</div>
+          </div>
+          <span style="font-size:22px;color:${s.cor}">${feita?'🔁':'▶️'}</span>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  app.innerHTML = `<div class="screen active">
+    <div class="topbar" style="background:${s.cor};color:#fff">
+      <button class="back-btn" style="color:#fff" onclick="App.goHome()">←</button>
+      <h2>${s.icon} ${esc(s.nome)}</h2>
+      <span class="pill-tag" style="background:rgba(0,0,0,.2)">Nv ${d.nivel}</span>
+    </div>
+    <div class="content" style="background:#f7fbff">${list}</div>
+  </div>`;
+}
+
+// ----- CONTEÚDO da lição -----
+function openLesson(lid){ State.lesson=lid; State.tela="content"; render(); }
+function getLesson(){ return (DATA[State.subj]||[]).find(l=>l.id===State.lesson); }
+
+function renderContent(){
+  const s=subjById(State.subj); const l=getLesson();
+  if(!l){ goHome(); return; }
+  app.innerHTML = `<div class="screen active">
+    <div class="topbar">
+      <button class="back-btn" onclick="App.openSubject('${s.id}')">←</button>
+      <h2 style="color:${s.cor}">${esc(l.titulo)}</h2>
+    </div>
+    <div class="content">
+      <div style="text-align:center;margin-bottom:10px">${mascot('')}</div>
+      <div class="lesson-content">${esc(l.texto)}</div>
+    </div>
+    <div style="padding:16px;border-top:2px solid var(--gray)">
+      <button class="btn" style="background:${s.cor};box-shadow:0 4px 0 rgba(0,0,0,.2)" onclick="App.startExercises()">
+        ${l.exercicios.length? '🚀 Iniciar Atividades':'⬅ Sem exercícios — Voltar'}
+      </button>
+    </div>
+  </div>`;
+}
+
+// ----- EXERCÍCIOS -----
+function startExercises(){
+  Sound.init(); // habilita áudio após o toque do usuário
+  const l=getLesson();
+  if(!l || l.exercicios.length===0){ openSubject(State.subj); return; }
+  Sess = { idx:0, vidas:3, acertos:0, respondido:false, acertouAtual:false, selecionado:null, total:l.exercicios.length };
+  State.tela="exercise"; render();
+}
+
+function renderExercise(){
+  const s=subjById(State.subj); const l=getLesson();
+  const ex = l.exercicios[Sess.idx];
+  const progresso = (Sess.idx / Sess.total)*100;
+  const hearts = "❤️".repeat(Sess.vidas) + "🤍".repeat(3-Sess.vidas);
+
+  let body="";
+  if(ex.tipo==="fill"){
+    body = `<input type="text" class="fill-input" id="fillAns" placeholder="Digite aqui..." autocomplete="off"
+              ${Sess.respondido?'disabled':''} oninput="App.onFillInput()">`;
+  } else {
+    const opcoes = ex.opcoes||[];
+    body = opcoes.map((o,i)=>{
+      let cls="opt";
+      if(Sess.respondido){
+        if(i===ex.correta) cls+=" correct";
+        else if(i===Sess.selecionado) cls+=" wrong";
+      } else if(Sess.selecionado===i) cls+=" selected";
+      const letra = ex.tipo==="vf" ? (i===0?'V':'F') : String.fromCharCode(65+i);
+      return `<div class="${cls}" onclick="App.selectOpt(${i})">
+        <span class="letter">${letra}</span><span>${esc(o)}</span></div>`;
+    }).join("");
+  }
+
+  // rodapé: ou botão verificar, ou feedback
+  let footer;
+  if(Sess.respondido){
+    const ok=Sess.acertouAtual;
+    let respCorreta = ex.tipo==="fill" ? ex.resposta : (ex.opcoes? ex.opcoes[ex.correta]:"");
+    footer = `<div class="feedback-bar ${ok?'correct':'wrong'}">
+      <div class="feedback-msg">${ok?'🎉 Muito bem!':'😕 Ops! Resposta certa: <span style="text-decoration:underline">'+esc(respCorreta)+'</span>'}</div>
+      <button class="btn ${ok?'':'red'}" onclick="App.nextExercise()">Continuar</button>
+    </div>`;
+  } else {
+    const dis = (ex.tipo==="fill") ? '' : (Sess.selecionado===null?'disabled':'');
+    footer = `<div class="feedback-bar">
+      <button class="btn" id="checkBtn" ${dis} onclick="App.checkAnswer()">Verificar</button>
+    </div>`;
+  }
+
+  app.innerHTML = `<div class="screen active">
+    <div class="exercise-top">
+      <button class="back-btn" onclick="App.confirmQuit()">✕</button>
+      <div class="progress-track"><div class="progress-fill" style="width:${progresso}%;background:${s.cor}"></div></div>
+      <div class="hearts">${hearts}</div>
+    </div>
+    <div class="content">
+      <div style="margin-bottom:6px"><span class="pill-tag" style="background:${s.cor}">${tipoLabel(ex.tipo)}</span></div>
+      <div class="q-prompt">${esc(ex.enunciado)}</div>
+      <div id="optWrap">${body}</div>
+    </div>
+    ${footer}
+  </div>`;
+}
+function tipoLabel(t){ return t==="mc"?"Múltipla escolha":(t==="vf"?"Verdadeiro ou Falso":"Complete a lacuna"); }
+
+function selectOpt(i){
+  if(Sess.respondido) return;
+  Sess.selecionado=i; renderExercise();
+}
+function onFillInput(){
+  const v=document.getElementById("fillAns");
+  const btn=document.getElementById("checkBtn");
+  if(btn) btn.disabled = !v.value.trim();
+}
+
+function checkAnswer(){
+  const l=getLesson(); const ex=l.exercicios[Sess.idx];
+  let ok=false;
+  if(ex.tipo==="fill"){
+    const val=document.getElementById("fillAns").value;
+    if(!val.trim()) return;
+    ok = norm(val)===norm(ex.resposta);
+  } else {
+    if(Sess.selecionado===null) return;
+    ok = Sess.selecionado===ex.correta;
+  }
+  Sess.respondido=true; Sess.acertouAtual=ok;
+  if(ok){ Sess.acertos++; Sound.correct(); }
+  else { Sess.vidas--; Sound.wrong(); }
+  renderExercise();
+  // animação de feedback
+  const wrap=document.getElementById("optWrap");
+  if(wrap && !ok) wrap.classList.add("shake");
+  // sem vidas → encerra
+  if(Sess.vidas<=0 && !ok){
+    setTimeout(()=>gameOver(), 700);
+  }
+}
+
+function nextExercise(){
+  const l=getLesson();
+  if(Sess.idx < Sess.total-1){
+    Sess.idx++; Sess.respondido=false; Sess.acertouAtual=false; Sess.selecionado=null;
+    renderExercise();
+  } else {
+    // concluiu todos
+    finishLesson();
+  }
+}
+
+function gameOver(){
+  const s=subjById(State.subj);
+  Sound.wrong();
+  app.innerHTML = `<div class="screen active">
+    <div class="celebrate">
+      <div style="font-size:70px">💔</div>
+      <h1 style="color:var(--red)">Acabaram os corações!</h1>
+      <p style="color:#777;margin:8px 0 20px">Não desista! Revise o conteúdo e tente novamente. Você consegue! 💪</p>
+      ${mascot('')}
+      <div style="width:100%;margin-top:24px">
+        <button class="btn" style="background:${s.cor};box-shadow:0 4px 0 rgba(0,0,0,.2)" onclick="App.startExercises()">🔁 Tentar de novo</button>
+        <button class="btn gray" style="margin-top:10px" onclick="App.openSubject('${s.id}')">Voltar às lições</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function finishLesson(){
+  const perfeito = Sess.acertos===Sess.total;
+  const r = concederRecompensa(State.subj, State.lesson, Sess.acertos);
+  const novasMedalhas = verificarMedalhas({ perfeito:perfeito });
+  State.tela="done"; State._reward=r; State._medalhas=novasMedalhas; render();
+}
+
+// ----- CELEBRAÇÃO / CONCLUSÃO -----
+function renderDone(){
+  const s=subjById(State.subj); const r=State._reward;
+  const medalhas = State._medalhas||[];
+  const medalhasHtml = medalhas.length ? `<div style="width:100%;margin-top:6px">
+      <div class="sec-title" style="text-align:center">🏅 Nova(s) conquista(s)!</div>
+      ${medalhas.map((m,i)=>`<div class="medal-pop pop" style="animation-delay:${.15*i}s">
+        <span style="font-size:30px">${m.icon}</span>
+        <div style="text-align:left"><b>${esc(m.titulo)}</b><div style="font-size:12px;color:#777">${esc(m.desc)}</div></div>
+      </div>`).join("")}
+    </div>` : '';
+  app.innerHTML = `<div class="screen active">
+    <div class="celebrate" id="celebrate">
+      ${mascot('bounce')}
+      <h1>Lição Concluída!</h1>
+      <p style="color:#777">Você acertou <b>${Sess.acertos}</b> de <b>${Sess.total}</b> ${Sess.total===1?'exercício':'exercícios'}!</p>
+      <div class="reward-row">
+        <div class="reward-box xp pop"><div class="rv">+${r.ganho}</div><div style="font-size:12px;color:#777">XP</div></div>
+        <div class="reward-box streak pop" style="animation-delay:.1s"><div class="rv">🔥 ${PROFILE.streak}</div><div style="font-size:12px;color:#777">Ofensiva</div></div>
+      </div>
+      ${r.subiuNivel? `<div class="pill-tag pop" style="background:var(--yellow);font-size:14px;padding:8px 16px">🎊 Subiu para o Nível ${r.nivel}!</div>`:''}
+      ${medalhasHtml}
+      <div style="width:100%;margin-top:28px">
+        <button class="btn" onclick="App.openSubject('${s.id}')">Continuar</button>
+        <button class="btn gray" style="margin-top:10px" onclick="App.goHome()">🏠 Início</button>
+      </div>
+    </div>
+  </div>`;
+  launchConfetti();
+  // sons: nível > medalha > celebração simples
+  if(r.subiuNivel) Sound.level();
+  else if(medalhas.length) Sound.unlock();
+  else Sound.celebrate();
+}
+
+function launchConfetti(){
+  const host=document.getElementById("celebrate"); if(!host) return;
+  const cores=["#58cc02","#1cb0f6","#ffc800","#ff4b4b","#ff7eb9","#9b59b6"];
+  for(let i=0;i<70;i++){
+    const c=document.createElement("div"); c.className="confetti";
+    c.style.left=(Math.random()*100)+"%";
+    c.style.background=cores[i%cores.length];
+    c.style.animationDuration=(2+Math.random()*2)+"s";
+    c.style.animationDelay=(Math.random()*0.6)+"s";
+    c.style.borderRadius = Math.random()>.5?"50%":"2px";
+    host.appendChild(c);
+    setTimeout(()=>c.remove(),4500);
+  }
+}
+
+function confirmQuit(){
+  if(confirm("Deseja sair da atividade? Seu progresso nesta lição será perdido.")) openSubject(State.subj);
+}
+
+// ----- PERFIL -----
+function openProfile(){ State.tela="profile"; render(); }
+function renderProfile(){
+  let rows = SUBJECTS.map(s=>{
+    const d=PROFILE.disciplinas[s.id];
+    const prog = xpNoNivel(d.xp)/XP_POR_NIVEL*100;
+    const total=(DATA[s.id]||[]).length;
+    const feitas=d.licoesConcluidas.filter(id=>(DATA[s.id]||[]).some(l=>l.id===id)).length;
+    return `<div class="card" style="cursor:default">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:24px">${s.icon}</span>
+        <div style="flex:1"><b>${esc(s.nome)}</b><div style="font-size:12px;color:var(--gray-d)">Nível ${d.nivel} • ${feitas}/${total} lições • ${d.xp} XP</div></div>
+      </div>
+      <div class="prog-bar-mini"><div style="width:${prog}%;background:${s.cor}"></div></div>
+    </div>`;
+  }).join("");
+  const medalhasGrid = ACHIEVEMENTS.map(a=>{
+    const tem = PROFILE.medalhas.indexOf(a.id)>=0;
+    return `<div class="medal ${tem?'':'locked'}" title="${esc(a.desc)}">
+      <div class="mi">${tem?a.icon:'🔒'}</div>
+      <div class="mt">${esc(a.titulo)}</div>
+    </div>`;
+  }).join("");
+  app.innerHTML = `<div class="screen active">
+    <div class="topbar"><button class="back-btn" onclick="App.goHome()">←</button><h2>👤 Meu Perfil</h2></div>
+    <div class="content">
+      <div style="text-align:center;margin-bottom:10px">${mascot('')}
+        <div style="margin-top:6px"><input id="nomeInput" value="${esc(PROFILE.nome)}" style="text-align:center;font-weight:800;font-size:18px;max-width:240px;margin:0 auto" onchange="App.saveName(this.value)"></div>
+        <div style="color:#777;font-size:13px">Toque no nome para editar ✏️</div>
+      </div>
+      <div class="stat-row" style="margin-bottom:16px">
+        <div class="stat-pill" style="background:#fff3cd;color:#856404"><div class="v">🔥 ${PROFILE.streak}</div><div class="l">Ofensiva</div></div>
+        <div class="stat-pill" style="background:#d7ffb8;color:#46a302"><div class="v">⭐ ${PROFILE.xpTotal}</div><div class="l">XP Total</div></div>
+        <div class="stat-pill" style="background:#ffe6f2;color:#c2185b"><div class="v">🏅 ${PROFILE.medalhas.length}</div><div class="l">Medalhas</div></div>
+      </div>
+
+      <div class="sec-title">🏅 Minhas conquistas (${PROFILE.medalhas.length}/${ACHIEVEMENTS.length})</div>
+      <div class="medal-grid">${medalhasGrid}</div>
+
+      <div class="sec-title">Progresso por disciplina</div>
+      ${rows}
+
+      <button class="btn ${PROFILE.som?'blue':'gray'}" style="margin-top:14px" onclick="App.toggleSound()">${PROFILE.som?'🔊 Som: Ligado':'🔇 Som: Desligado'}</button>
+      <button class="btn gray" style="margin-top:10px" onclick="App.resetProgress()">🗑️ Zerar meu progresso</button>
+    </div>
+  </div>`;
+}
+function toggleSound(){ PROFILE.som=!PROFILE.som; saveProfile(); if(PROFILE.som){ Sound.init(); Sound.correct(); } render(); }
+function saveName(v){ PROFILE.nome=(v||"").trim()||"Aluno(a)"; saveProfile(); toast("Nome salvo!"); }
+function resetProgress(){
+  if(confirm("Tem certeza que deseja zerar TODO o seu progresso (XP, níveis, ofensiva)?")){
+    PROFILE=defaultProfile(); saveProfile(); toast("Progresso zerado."); goHome();
+  }
+}
+
+/* ============================================================
+   E) UI DO PROFESSOR
+   ============================================================ */
+const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, iaErro:"", iaConfigAberta:false };
+
+function openPwModal(){ document.getElementById("pwModal").classList.add("show"); setTimeout(()=>document.getElementById("pwInput").focus(),100); }
+function closePwModal(){ document.getElementById("pwModal").classList.remove("show"); document.getElementById("pwInput").value=""; }
+function checkPassword(){
+  const v=document.getElementById("pwInput").value;
+  if(v===PASSWORD){ closePwModal(); State.tela="teacher"; Teacher.tab="licoes"; render(); }
+  else { toast("Senha incorreta!"); document.getElementById("pwInput").value=""; }
+}
+
+function renderTeacher(){
+  let inner;
+  if(Teacher.tab==="licoes") inner=teacherLessonsTab();
+  else if(Teacher.tab==="novo") inner=teacherEditorTab();
+  else inner=teacherProgressTab();
+
+  app.innerHTML = `<div class="screen active">
+    <div class="topbar" style="background:#9b59b6;color:#fff">
+      <button class="back-btn" style="color:#fff" onclick="App.goHome()">←</button>
+      <h2>👩‍🏫 Painel do Professor</h2>
+    </div>
+    <div class="teacher-tabs">
+      <button class="teacher-tab ${Teacher.tab==='licoes'?'active':''}" onclick="App.teacherTab('licoes')">📋 Lições</button>
+      <button class="teacher-tab ${Teacher.tab==='novo'?'active':''}" onclick="App.teacherTab('novo')">${Teacher.editingLesson?'✏️ Editar':'➕ Nova'}</button>
+      <button class="teacher-tab ${Teacher.tab==='progresso'?'active':''}" onclick="App.teacherTab('progresso')">📊 Progresso</button>
+    </div>
+    <div class="content" style="background:#faf7ff">${inner}</div>
+  </div>`;
+}
+function teacherTab(t){
+  if(t!=="novo") Teacher.editingLesson=null;
+  Teacher.tab=t; render();
+}
+
+// --- ABA: listar lições (com seletor de disciplina) ---
+function teacherLessonsTab(){
+  const sel = subjSelect(Teacher.subj, "App.teacherSelectSubj(this.value)");
+  const licoes = DATA[Teacher.subj]||[];
+  let list;
+  if(licoes.length===0){
+    list = `<div class="empty"><div class="em">📝</div><p>Nenhuma lição nesta disciplina.<br>Crie uma na aba "Nova".</p></div>`;
+  } else {
+    list = licoes.map(l=>`<div class="t-lesson-row">
+      <div class="info"><div class="t">${esc(l.titulo)}</div><div class="d">${l.exercicios.length} exercício(s)</div></div>
+      <button class="icon-btn" title="Editar" onclick="App.editLesson('${l.id}')">✏️</button>
+      <button class="icon-btn" title="Excluir" onclick="App.deleteLesson('${l.id}')">🗑️</button>
+    </div>`).join("");
+  }
+  return `<label>Disciplina</label>${sel}
+    <div class="sec-title">Lições cadastradas</div>${list}
+    <button class="btn" style="margin-top:10px" onclick="App.newLesson()">➕ Criar nova lição</button>`;
+}
+function subjSelect(val, onchange){
+  return `<select onchange="${onchange}">${SUBJECTS.map(s=>`<option value="${s.id}" ${s.id===val?'selected':''}>${s.icon} ${esc(s.nome)}</option>`).join("")}</select>`;
+}
+function teacherSelectSubj(v){ Teacher.subj=v; render(); }
+
+function resetIaEstado(){ Teacher.gerando=false; Teacher.iaErro=""; Teacher.iaConfigAberta=false; }
+function newLesson(){ Teacher.editingLesson={ id:null, titulo:"", texto:"", exercicios:[] }; resetIaEstado(); Teacher.tab="novo"; render(); }
+function editLesson(id){
+  const l=(DATA[Teacher.subj]||[]).find(x=>x.id===id);
+  if(!l) return;
+  // clone profundo para edição
+  Teacher.editingLesson = JSON.parse(JSON.stringify(l));
+  resetIaEstado(); Teacher.tab="novo"; render();
+}
+function deleteLesson(id){
+  if(!confirm("Excluir esta lição e todos os seus exercícios?")) return;
+  DATA[Teacher.subj]=(DATA[Teacher.subj]||[]).filter(l=>l.id!==id);
+  saveData(); toast("Lição excluída."); render();
+}
+
+// --- ABA: editor de lição + exercícios ---
+function teacherEditorTab(){
+  const L = Teacher.editingLesson || { id:null, titulo:"", texto:"", exercicios:[] };
+  const sel = subjSelect(Teacher.subj, "App.teacherSelectSubj(this.value)");
+
+  let exs = L.exercicios.map((ex,i)=>exEditorCard(ex,i)).join("");
+  if(L.exercicios.length===0) exs=`<p style="color:var(--gray-d);text-align:center;padding:10px">Nenhum exercício ainda. Adicione abaixo 👇</p>`;
+
+  return `<div class="sec-title">${L.id?'Editando lição':'Nova lição'}</div>
+    <label>Disciplina</label>${sel}
+    <label>Título da lição</label>
+    <input id="lTitulo" value="${esc(L.titulo)}" placeholder="Ex: Frações Simples">
+    <label>Texto explicativo / material de estudo</label>
+    <textarea id="lTexto" placeholder="Escreva o conteúdo da lição aqui...">${esc(L.texto)}</textarea>
+
+    ${iaPanel(L)}
+
+    <div class="sec-title">Exercícios (${L.exercicios.length})</div>
+    <div id="exList">${exs}</div>
+    <button class="btn blue small" style="width:100%;margin-bottom:8px" onclick="App.addExercise()">➕ Adicionar exercício</button>
+
+    <button class="btn" style="margin-top:8px" onclick="App.saveLesson()">💾 Salvar lição</button>
+    <button class="btn gray" style="margin-top:10px" onclick="App.teacherTab('licoes')">Cancelar</button>`;
+}
+
+// ---- PAINEL DE GERAÇÃO POR IA (Groq / llama-3.1-8b-instant, gratuito) ----
+function iaPanel(L){
+  const temTexto = (L.texto||"").trim().length>0;
+  const temChave = (IA.apiKey||"").trim().length>0;
+
+  // estado de carregamento
+  if(Teacher.gerando){
+    return `<div class="ia-panel">
+      <div class="ia-loading"><span class="ia-spinner"></span> Gerando exercícios com IA...</div>
+      <p style="font-size:12px;color:#777;text-align:center;margin-top:6px">Isso pode levar alguns segundos.</p>
+    </div>`;
+  }
+
+  const erro = Teacher.iaErro ? `<div class="ia-erro">⚠️ ${esc(Teacher.iaErro)}</div>` : "";
+  const configAberta = Teacher.iaConfigAberta;
+
+  const config = configAberta ? `
+    <label>Groq API Key</label>
+    <input type="password" id="iaKey" value="${esc(IA.apiKey)}" placeholder="gsk_..." autocomplete="off">
+    <p style="font-size:11px;color:#999;margin-top:-6px">🔒 Salva apenas neste navegador (localStorage). Não compartilhe esta chave.</p>
+    <p style="font-size:12px;color:#1a73e8;margin:0 0 10px">🔑 Obtenha uma chave <b>gratuita</b> em <b>console.groq.com</b> → "API Keys".</p>
+    <label>Ao gerar, os exercícios devem:</label>
+    <select id="iaModo" onchange="App.setModoIA(this.value)">
+      <option value="substituir" ${IA.modo==='substituir'?'selected':''}>Substituir os exercícios atuais</option>
+      <option value="acumular" ${IA.modo==='acumular'?'selected':''}>Acumular (somar aos atuais)</option>
+    </select>
+    <button class="btn gray small" style="width:100%" onclick="App.salvarChaveIA()">💾 Salvar configuração da IA</button>
+  ` : "";
+
+  return `<div class="ia-panel">
+    <div class="ia-head">
+      <b>🤖 Gerar Exercícios com IA</b>
+      <button class="icon-btn" style="background:transparent;font-size:15px" onclick="App.toggleIaConfig()" title="Configurar">⚙️</button>
+    </div>
+    <p style="font-size:12px;color:#777;margin-bottom:8px">Cria 5 exercícios variados (3 múltipla escolha, 1 V/F, 1 lacuna) com base no conteúdo acima, usando o Groq (${IA_MODELO}) — gratuito.</p>
+    ${erro}
+    ${config}
+    <button class="btn" style="background:#9b59b6;box-shadow:0 4px 0 #7d3c98;margin-top:4px" ${(!temTexto||!temChave)?'disabled':''} onclick="App.gerarExerciciosIA()">
+      ✨ Gerar Exercícios com IA
+    </button>
+    ${!temChave ? `<p style="font-size:12px;color:#c0392b;text-align:center;margin-top:6px">Configure sua Groq API Key (gratuita) no ⚙️ para habilitar.</p>`
+      : (!temTexto ? `<p style="font-size:12px;color:#c0392b;text-align:center;margin-top:6px">Escreva o conteúdo da lição primeiro.</p>`:'')}
+  </div>`;
+}
+function toggleIaConfig(){ syncTextInputs(); Teacher.iaConfigAberta=!Teacher.iaConfigAberta; render(); }
+function salvarChaveIA(){
+  const k=document.getElementById("iaKey"); if(k) IA.apiKey=k.value.trim();
+  const m=document.getElementById("iaModo"); if(m) IA.modo=m.value;
+  saveIA(); syncTextInputs(); Teacher.iaConfigAberta=false; Teacher.iaErro=""; toast("Configuração da IA salva!"); render();
+}
+function setModoIA(v){ IA.modo=v; saveIA(); }
+
+// Monta o prompt e chama a API do Groq direto do navegador
+async function gerarExerciciosIA(){
+  syncTextInputs();
+  const L=Teacher.editingLesson;
+  const conteudo=(L.texto||"").trim();
+  if(!conteudo){ Teacher.iaErro="Escreva o conteúdo da lição antes de gerar."; render(); return; }
+  if(!IA.apiKey.trim()){ Teacher.iaErro="Configure a chave da API no ⚙️."; render(); return; }
+
+  Teacher.gerando=true; Teacher.iaErro=""; render();
+
+  const prompt =
+`Você é um professor do 5º ano do Ensino Fundamental (Sistema Positivo).
+Com base no conteúdo abaixo, gere 5 exercícios variados para crianças de 10 anos.
+Use os tipos: múltipla escolha (3 exercícios), verdadeiro/falso (1 exercício) e completar lacunas (1 exercício).
+O nível deve ser adequado ao 5º ano: linguagem simples, exemplos do cotidiano.
+Retorne APENAS um JSON válido, sem explicações, no formato:
+[
+  {"tipo": "multipla_escolha", "enunciado": "...", "opcoes": ["A", "B", "C", "D"], "resposta_correta": "A"},
+  {"tipo": "verdadeiro_falso", "enunciado": "...", "resposta_correta": "verdadeiro"},
+  {"tipo": "completar_lacunas", "enunciado": "O ___ é usado quando...", "resposta_correta": "palavra correta"}
+]
+Conteúdo da lição: ${conteudo}`;
+
+  try{
+    const resp = await fetch(IA_ENDPOINT, {
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "Authorization":"Bearer " + IA.apiKey.trim()
+      },
+      body: JSON.stringify({
+        model: IA_MODELO,
+        messages:[{ role:"user", content: prompt }],
+        temperature: 0.7
+      })
+    });
+
+    if(!resp.ok){
+      let detalhe="";
+      try{ const e=await resp.json(); detalhe = e.error && e.error.message ? e.error.message : ""; }catch(_){}
+      if(resp.status===401) detalhe = detalhe || "Chave da API inválida.";
+      if(resp.status===429) detalhe = detalhe || "Limite de uso atingido. Aguarde um pouco e tente novamente.";
+      throw new Error(`Erro ${resp.status}${detalhe? " — "+detalhe : ""}`);
+    }
+
+    const data = await resp.json();
+    const texto = data.choices && data.choices[0] && data.choices[0].message
+      ? (data.choices[0].message.content || "") : "";
+    const novos = parseExerciciosIA(texto);
+    if(!novos.length) throw new Error("A IA não retornou exercícios reconhecíveis. Tente novamente.");
+
+    if(IA.modo==="acumular") L.exercicios = L.exercicios.concat(novos);
+    else L.exercicios = novos;
+
+    Teacher.gerando=false; Teacher.iaErro="";
+    render();
+    toast(`✨ ${novos.length} exercícios gerados! Revise e salve.`);
+  }catch(err){
+    Teacher.gerando=false;
+    let msg = err && err.message ? err.message : "Falha ao contatar a IA.";
+    if(/Failed to fetch|NetworkError/i.test(msg)) msg = "Não foi possível conectar. Verifique sua internet e a chave da API.";
+    Teacher.iaErro = msg;
+    render();
+  }
+}
+
+// Converte o JSON retornado pela IA para o formato interno de exercícios
+function parseExerciciosIA(texto){
+  if(!texto) return [];
+  let s = texto.trim();
+  // remove cercas de código ```json ... ```
+  s = s.replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"");
+  // tenta extrair o array, caso venha com texto ao redor
+  const ini=s.indexOf("["), fim=s.lastIndexOf("]");
+  if(ini>=0 && fim>ini) s = s.slice(ini, fim+1);
+  let arr;
+  try{ arr = JSON.parse(s); }catch(e){ return []; }
+  if(!Array.isArray(arr)) return [];
+
+  const out=[];
+  arr.forEach(item=>{
+    if(!item || !item.enunciado) return;
+    const tipo = String(item.tipo||"").toLowerCase();
+    const resp = item.resposta_correta;
+    if(tipo.indexOf("verdadeiro")>=0 || tipo==="vf"){
+      const v = norm(resp);
+      out.push({ id:uid(), tipo:"vf", enunciado:String(item.enunciado),
+        opcoes:["Verdadeiro","Falso"], correta:(v.charAt(0)==="v"||v==="true"||v==="1")?0:1 });
+    } else if(tipo.indexOf("lacuna")>=0 || tipo.indexOf("completar")>=0 || tipo==="fill"){
+      out.push({ id:uid(), tipo:"fill", enunciado:String(item.enunciado), resposta:String(resp==null?"":resp) });
+    } else { // múltipla escolha (padrão)
+      let opcoes = Array.isArray(item.opcoes)? item.opcoes.map(o=>String(o)) : [];
+      if(opcoes.length<2) return;
+      let correta = acharIndiceCorreto(opcoes, resp);
+      out.push({ id:uid(), tipo:"mc", enunciado:String(item.enunciado), opcoes, correta });
+    }
+  });
+  return out;
+}
+// Descobre o índice da opção correta a partir de "resposta_correta" (texto da opção ou letra A/B/C/D)
+function acharIndiceCorreto(opcoes, resp){
+  if(resp==null) return 0;
+  const r = String(resp).trim();
+  // match exato por texto (ignora acentos/maiúsculas)
+  let idx = opcoes.findIndex(o=>norm(o)===norm(r));
+  if(idx>=0) return idx;
+  // letra A-Z
+  if(/^[a-zA-Z]$/.test(r)){
+    const li = r.toUpperCase().charCodeAt(0)-65;
+    if(li>=0 && li<opcoes.length) return li;
+  }
+  // contém o texto
+  idx = opcoes.findIndex(o=>norm(o).indexOf(norm(r))>=0 && norm(r).length>0);
+  return idx>=0 ? idx : 0;
+}
+
+// Card editor de um exercício. Reflete o estado em Teacher.editingLesson.exercicios[i]
+function exEditorCard(ex,i){
+  const tipoSel = `<select onchange="App.setExType(${i},this.value)">
+    <option value="mc" ${ex.tipo==='mc'?'selected':''}>Múltipla escolha</option>
+    <option value="vf" ${ex.tipo==='vf'?'selected':''}>Verdadeiro / Falso</option>
+    <option value="fill" ${ex.tipo==='fill'?'selected':''}>Completar lacuna</option>
+  </select>`;
+
+  let corpo="";
+  if(ex.tipo==="fill"){
+    corpo = `<label>Resposta correta</label>
+      <input value="${esc(ex.resposta||'')}" placeholder="Resposta esperada" oninput="App.setExResp(${i},this.value)">
+      <p style="font-size:12px;color:var(--gray-d)">Use ____ no enunciado para indicar a lacuna. A correção ignora maiúsculas e acentos.</p>`;
+  } else {
+    const opcoes = ex.opcoes || [];
+    corpo = `<label>Opções (marque a correta ✓)</label>` + opcoes.map((o,j)=>`
+      <div class="opt-row">
+        <button class="icon-btn pick" style="background:${ex.correta===j?'#58cc02':'#f0f0f0'};color:${ex.correta===j?'#fff':'#999'}" onclick="App.setCorrect(${i},${j})" title="Marcar como correta">✓</button>
+        <input type="text" value="${esc(o)}" placeholder="Opção ${j+1}" oninput="App.setOpt(${i},${j},this.value)" ${ex.tipo==='vf'?'readonly style=background:#eee':''}>
+        ${ex.tipo==='mc' && opcoes.length>2 ? `<button class="icon-btn" onclick="App.removeOpt(${i},${j})" title="Remover opção">✕</button>`:''}
+      </div>`).join("") +
+      (ex.tipo==='mc' && opcoes.length<6 ? `<button class="btn gray small" style="width:100%;margin-top:4px" onclick="App.addOpt(${i})">+ opção</button>`:'');
+  }
+
+  return `<div class="ex-edit-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b>Exercício ${i+1}</b>
+      <button class="icon-btn" onclick="App.removeExercise(${i})" title="Remover exercício">🗑️</button>
+    </div>
+    <label>Tipo</label>${tipoSel}
+    <label>Enunciado</label>
+    <input value="${esc(ex.enunciado||'')}" placeholder="Escreva a pergunta" oninput="App.setExEnun(${i},this.value)">
+    ${corpo}
+  </div>`;
+}
+
+// ---- mutações do exercício em edição (sincroniza inputs antes de re-render) ----
+function syncTextInputs(){
+  // captura título e texto antes de re-renderizar (eles não têm oninput para evitar re-render no meio da digitação)
+  const t=document.getElementById("lTitulo"), x=document.getElementById("lTexto");
+  if(t) Teacher.editingLesson.titulo=t.value;
+  if(x) Teacher.editingLesson.texto=x.value;
+}
+function addExercise(){
+  syncTextInputs();
+  Teacher.editingLesson.exercicios.push({ id:uid(), tipo:"mc", enunciado:"", opcoes:["",""], correta:0 });
+  render();
+}
+function removeExercise(i){ syncTextInputs(); Teacher.editingLesson.exercicios.splice(i,1); render(); }
+function setExType(i,t){
+  syncTextInputs();
+  const ex=Teacher.editingLesson.exercicios[i];
+  ex.tipo=t;
+  if(t==="vf"){ ex.opcoes=["Verdadeiro","Falso"]; if(ex.correta>1)ex.correta=0; delete ex.resposta; }
+  else if(t==="mc"){ if(!ex.opcoes||ex.opcoes.length<2)ex.opcoes=["",""]; ex.correta=ex.correta||0; delete ex.resposta; }
+  else if(t==="fill"){ ex.resposta=ex.resposta||""; }
+  render();
+}
+function setExEnun(i,v){ Teacher.editingLesson.exercicios[i].enunciado=v; }
+function setExResp(i,v){ Teacher.editingLesson.exercicios[i].resposta=v; }
+function setOpt(i,j,v){ Teacher.editingLesson.exercicios[i].opcoes[j]=v; }
+function setCorrect(i,j){ syncTextInputs(); Teacher.editingLesson.exercicios[i].correta=j; render(); }
+function addOpt(i){ syncTextInputs(); Teacher.editingLesson.exercicios[i].opcoes.push(""); render(); }
+function removeOpt(i,j){
+  syncTextInputs();
+  const ex=Teacher.editingLesson.exercicios[i];
+  ex.opcoes.splice(j,1);
+  if(ex.correta>=ex.opcoes.length) ex.correta=0;
+  render();
+}
+
+function saveLesson(){
+  syncTextInputs();
+  const L=Teacher.editingLesson;
+  if(!L.titulo.trim()){ toast("Dê um título à lição."); return; }
+  // validação dos exercícios
+  for(let k=0;k<L.exercicios.length;k++){
+    const ex=L.exercicios[k];
+    if(!ex.enunciado.trim()){ toast(`Exercício ${k+1}: falta o enunciado.`); return; }
+    if(ex.tipo==="fill"){
+      if(!ex.resposta || !ex.resposta.trim()){ toast(`Exercício ${k+1}: informe a resposta.`); return; }
+    } else {
+      if(ex.opcoes.some(o=>!o.trim())){ toast(`Exercício ${k+1}: preencha todas as opções.`); return; }
+    }
+  }
+  if(!DATA[Teacher.subj]) DATA[Teacher.subj]=[];
+  if(L.id){ // editar existente
+    const arr=DATA[Teacher.subj]; const idx=arr.findIndex(l=>l.id===L.id);
+    if(idx>=0) arr[idx]=L; else arr.push(L);
+  } else { // nova
+    L.id=uid(); DATA[Teacher.subj].push(L);
+  }
+  saveData();
+  Teacher.editingLesson=null; Teacher.tab="licoes";
+  toast("Lição salva com sucesso! ✅");
+  render();
+}
+
+// --- ABA: progresso do aluno ---
+function teacherProgressTab(){
+  const concl = SUBJECTS.reduce((a,s)=>a+PROFILE.disciplinas[s.id].licoesConcluidas.length,0);
+  let rows = SUBJECTS.map(s=>{
+    const d=PROFILE.disciplinas[s.id];
+    const total=(DATA[s.id]||[]).length;
+    const feitas=d.licoesConcluidas.filter(id=>(DATA[s.id]||[]).some(l=>l.id===id)).length;
+    const pct = total? Math.round(feitas/total*100):0;
+    return `<div class="card" style="cursor:default">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">${s.icon}</span>
+        <div style="flex:1"><b>${esc(s.nome)}</b>
+          <div style="font-size:12px;color:var(--gray-d)">Nível ${d.nivel} • ${feitas}/${total} lições • ${d.xp} XP</div></div>
+        <b style="color:${s.cor}">${pct}%</b>
+      </div>
+      <div class="prog-bar-mini"><div style="width:${pct}%;background:${s.cor}"></div></div>
+    </div>`;
+  }).join("");
+  return `<div style="text-align:center;margin-bottom:6px">
+      <div style="font-size:18px;font-weight:800">${esc(PROFILE.nome)}</div>
+      <div style="color:#777;font-size:13px">🔥 ${PROFILE.streak} de ofensiva • ⭐ ${PROFILE.xpTotal} XP • ✅ ${concl} lições concluídas</div>
+    </div>
+    <div class="sec-title">Desempenho por disciplina</div>
+    ${rows}`;
+}
+
+/* ============================================================
+   F) INICIALIZAÇÃO + API pública (App.*)
+   ============================================================ */
+window.App = {
+  goHome, openSubject, openLesson, startExercises, selectOpt, onFillInput,
+  checkAnswer, nextExercise, confirmQuit, openProfile, saveName, resetProgress, toggleSound,
+  // professor
+  openPwModal, closePwModal, checkPassword, teacherTab, teacherSelectSubj,
+  newLesson, editLesson, deleteLesson, addExercise, removeExercise, setExType,
+  setExEnun, setExResp, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
+  // IA
+  gerarExerciciosIA, toggleIaConfig, salvarChaveIA, setModoIA,
+};
+
+// Enter no campo de senha
+document.getElementById("pwInput").addEventListener("keydown",e=>{ if(e.key==="Enter") checkPassword(); });
+
+// Boot
+loadData();
+loadProfile();
+loadIA();
+render();
+
+})();
+</script>
+</body>
+</html>
