@@ -19,14 +19,17 @@ offline após o primeiro carregamento.
   estático (ex.: Live Server do VS Code).
 - **Importante:** após editar, recarregue com **Ctrl+Shift+R** (hard reload) — o
   navegador costuma servir a versão em cache do arquivo.
+- **Requer internet** para carregar o Firebase (CDN) e as lições do Firestore. Os
+  recursos de IA também exigem rede. O resto (gamificação/progresso) é local.
 - Não há testes automatizados nem passo de compilação.
 
 ## Validar alterações no JavaScript
 
-O JS fica embutido em `<script>...</script>`. Para checar a sintaxe sem abrir o navegador:
+O JS fica embutido no **último** bloco `<script>...</script>` (há também 2 `<script src>`
+do Firebase, sem conteúdo inline). Para checar a sintaxe sem abrir o navegador:
 
 ```bash
-node -e "const fs=require('fs');const h=fs.readFileSync('index.html','utf8');const m=h.match(/<script>([\s\S]*)<\/script>/);fs.writeFileSync('_check.js',m[1]);" && node --check _check.js && echo OK && rm -f _check.js
+node -e "const fs=require('fs');const h=fs.readFileSync('index.html','utf8');const b=[...h.matchAll(/<script>([\s\S]*?)<\/script>/g)];fs.writeFileSync('_check.js',b[b.length-1][1]);" && node --check _check.js && echo OK && rm -f _check.js
 ```
 
 Sempre rode isso após mexer no JavaScript.
@@ -50,7 +53,9 @@ O CSS e o JS são organizados em seções comentadas. No JavaScript (dentro de u
 - **E) UI DO PROFESSOR** — login por senha, abas (lições / editor / progresso),
   CRUD de lições/exercícios, e o painel de **geração por IA**.
 - **F) INICIALIZAÇÃO** — objeto público `window.App` (todos os handlers chamados via
-  `onclick="App.x()"`) e o boot (`loadData()`, `loadProfile()`, `loadIA()`, `render()`).
+  `onclick="App.x()"`) e o `boot()` **assíncrono** (`loadProfile()`, `loadIA()`,
+  `initFirebase()`, `await loadLicoes()`, `render()`), com tela de carregamento e de
+  erro de conexão (`mostrarCarregando` / `mostrarErroConexao`, retry via `App.retryBoot`).
 
 ## Conceitos-chave
 
@@ -62,20 +67,38 @@ O CSS e o JS são organizados em seções comentadas. No JavaScript (dentro de u
   que re-renderiza** (perderia o foco). Título/texto da lição são lidos sob demanda por
   `syncTextInputs()` antes de qualquer re-render.
 
-### Persistência (localStorage)
-Quatro chaves (todas criadas no boot se não existirem):
+### Persistência
+
+**Lições → Firebase Firestore.** As lições do professor ficam na coleção `licoes`
+do Firestore (projeto `estudamais-5cb1b`). O Firebase é carregado por **CDN compat**
+(`firebase-app-compat.js` + `firebase-firestore-compat.js`, sem bundler/import) e
+inicializado em `initFirebase()` → `db = firebase.firestore()` (com `enablePersistence`
+best-effort para cache offline).
+
+- Documento Firestore: `{ disciplina, titulo, conteudo, exercicios, criadoEm }`.
+- Lição interna no app: `{ id, titulo, texto, exercicios }` (note: `conteudo`↔`texto`,
+  `id` = id do documento). Conversão em `licaoDeDoc()`.
+- `loadLicoes()` baixa tudo e agrupa em `DATA[disciplina]`. Se a coleção estiver vazia
+  na 1ª vez (e `SEED_FLAG` não setado no navegador), `seedFirestore()` popula os 27
+  exemplos uma vez.
+- CRUD do professor é **assíncrono** e grava no Firestore: `saveLesson()`
+  (`add`/`set merge`), `deleteLesson()` (`delete`), atualizando `DATA` local em seguida.
+- ⚠️ **Regras do Firestore:** o app é client-only; o projeto precisa ter regras que
+  permitam leitura/escrita na coleção `licoes` (modo de teste ou regras adequadas),
+  senão o boot cai na tela de erro de conexão.
+
+**localStorage** — apenas dados locais do aluno/dispositivo:
 
 | Chave | Conteúdo |
 |---|---|
-| `estudamais_dados_v2` | Lições e exercícios (`DATA`) |
 | `estudamais_perfil_v1` | Progresso do aluno (`PROFILE`: XP, níveis, streak, medalhas, som) |
-| `estudamais_ia_v1` | Config da IA (`IA`: `{apiKey, modo}`) — **não** versionada |
-| `estudamais_dados_v1` | Versão antiga (legado; ignorada) |
+| `estudamais_ia_v1` | Config da IA (`IA`: `{apiKey, modo}`) |
+| `estudamais_seed_firestore` | Flag: exemplos já semeados no Firestore por este navegador |
 
-- `localStorage` é **por navegador e por origem** (`file://` ≠ `http://127.0.0.1:5500`).
-  Os dados não acompanham o arquivo `index.html` ao movê-lo/copiá-lo.
-- Bump de `STORAGE_KEY` (ex.: `_v1` → `_v2`) descarta as lições antigas e recria os
-  exemplos. Faça isso conscientemente.
+- `localStorage` é por navegador/origem; o progresso não sincroniza entre dispositivos
+  (apenas as lições, que vivem no Firestore).
+- O id da lição agora é o id do documento Firestore — `PROFILE.licoesConcluidas`
+  guarda esses ids; progresso anterior (ids antigos) não casa com as lições novas.
 
 ### Modelo de dados
 - Disciplina: objeto em `SUBJECTS` com `{id, nome, icon, cor}`.

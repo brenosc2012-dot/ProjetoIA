@@ -38,7 +38,9 @@ com facilidade — manualmente ou com geração automática de exercícios por I
 
 ### Conteúdo e técnico
 - [x] Conteúdo de exemplo pré-cadastrado (3 lições por disciplina = 27 lições).
-- [x] Persistência total via `localStorage`.
+- [x] **Lições no Firebase Firestore** (coleção `licoes`) — professor cria/edita/exclui
+      na nuvem; aluno acessa de qualquer dispositivo. Tela de "Carregando lições..." e
+      erro de conexão com retry. `localStorage` mantém só progresso/XP e config da IA.
 - [x] Design mobile-first (max-width 480px, botões grandes, fontes legíveis).
 - [x] Mascote "Estrelinha" em SVG e paleta própria (violeta), distinta do Duolingo.
 - [x] Rolagem correta do app-shell (altura fixa + `min-height:0` nos contêineres).
@@ -69,17 +71,21 @@ Itens candidatos (nenhum confirmado ainda — priorizar conforme o uso real):
 
 ## Restrições / princípios de design
 
-- Manter **arquivo único** `index.html`, **sem frameworks, sem CDNs externos**.
-- **Offline-first**: deve funcionar sem internet após o primeiro carregamento
-  (exceto a geração por IA, que exige rede).
+- Manter **arquivo único** `index.html`, **sem bundler** (Firebase via CDN compat).
 - **Mobile-first** e foco na **facilidade do professor** cadastrar conteúdo.
+- Lições na nuvem (Firestore); progresso/XP local (localStorage).
 - Textos e código em **português (pt-BR)**.
 - Sempre validar a sintaxe do JS após mudanças (ver `CLAUDE.md`).
 
 ## Riscos conhecidos
 
-- Dados ficam só no `localStorage` (por navegador/origem) — sem backup nativo no momento,
-  risco de perda ao limpar o navegador ou trocar de dispositivo.
-- Chave da IA exposta no cliente — não publicar com a chave embutida.
+- **Lições exigem internet** (Firestore + CDN do Firebase). Há cache offline best-effort
+  (`enablePersistence`), mas o 1º carregamento precisa de rede.
+- **Regras do Firestore** precisam permitir leitura/escrita em `licoes`; do contrário o
+  app cai na tela de erro de conexão. A `apiKey` do Firebase no client é normal/pública,
+  mas a segurança real depende das regras (hoje provavelmente em modo de teste).
+- Progresso do aluno fica só no `localStorage` (por navegador/origem) — não sincroniza
+  entre dispositivos e se perde ao limpar o navegador.
+- Chave da IA (Groq) exposta no cliente — não publicar com a chave embutida.
 - Senha do professor hardcoded — barreira simples, não é segurança real.
 - Dependência de cota gratuita do provedor de IA (limites/erros 429).

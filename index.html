@@ -319,6 +319,10 @@ label{ display:block; font-weight:700; font-size:14px; margin-bottom:6px; color:
   </div>
 </div>
 
+<!-- Firebase (módulos compat via CDN — sem bundler/import) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
 <script>
 /* ============================================================
    ESTUDAMAIS — JavaScript
@@ -337,9 +341,30 @@ label{ display:block; font-weight:700; font-size:14px; margin-bottom:6px; color:
    A) DADOS
    ============================================================ */
 const PASSWORD = "professor123";
-const STORAGE_KEY = "estudamais_dados_v2";
+// As LIÇÕES ficam no Firebase Firestore (coleção "licoes").
+// O localStorage guarda apenas o progresso/XP do aluno e a config da IA.
 const PROFILE_KEY = "estudamais_perfil_v1";
 const IA_KEY = "estudamais_ia_v1";
+const SEED_FLAG = "estudamais_seed_firestore"; // marca que já semeamos os exemplos neste navegador
+
+// ----- Firebase / Firestore -----
+const firebaseConfig = {
+  apiKey: "AIzaSyDE5ikPdDSc0-olqnSlV1F1uKiOV-TCofk",
+  authDomain: "estudamais-5cb1b.firebaseapp.com",
+  projectId: "estudamais-5cb1b",
+  storageBucket: "estudamais-5cb1b.firebasestorage.app",
+  messagingSenderId: "638423075835",
+  appId: "1:638423075835:web:9d1cbf3be714fa20a2595e",
+  measurementId: "G-1K93EM8LZ9"
+};
+let db = null;
+function initFirebase(){
+  if(typeof firebase === "undefined") throw new Error("Firebase não carregou (sem conexão?).");
+  if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+  // cache offline (best-effort; não bloqueia se falhar)
+  try{ db.enablePersistence({ synchronizeTabs:true }).catch(function(){}); }catch(e){}
+}
 
 // Configuração da geração por IA (Groq, gratuito). Salva em localStorage.
 const IA_MODELO = "llama-3.1-8b-instant";
@@ -575,11 +600,51 @@ function uid(){ return "id" + Math.random().toString(36).slice(2,9) + Date.now()
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function norm(s){ return String(s||"").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[̀-ͯ]/g,""); }
 
-function loadData(){
-  try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ DATA=JSON.parse(raw); return; } }catch(e){}
-  DATA = seedData(); saveData();
+// ----- LIÇÕES no Firestore -----
+// Documento Firestore: { disciplina, titulo, conteudo, exercicios, criadoEm }
+// Lição interna no app:  { id, titulo, texto, exercicios }
+function licaoDeDoc(id, d){
+  return { id, titulo:d.titulo||"", texto:d.conteudo||"", exercicios:Array.isArray(d.exercicios)?d.exercicios:[] };
 }
-function saveData(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); }catch(e){} }
+function removeLicaoLocal(id){ SUBJECTS.forEach(s=>{ DATA[s.id]=(DATA[s.id]||[]).filter(l=>l.id!==id); }); }
+
+// Carrega todas as lições do Firestore para DATA (agrupadas por disciplina).
+async function loadLicoes(){
+  SUBJECTS.forEach(s=> DATA[s.id]=[]);
+  const snap = await db.collection("licoes").get();
+  const docs=[];
+  snap.forEach(doc=> docs.push({ id:doc.id, d:doc.data() }));
+  // ordena por criadoEm (mais antigo primeiro), tolerando ausência
+  docs.sort((a,b)=> ((a.d.criadoEm&&a.d.criadoEm.seconds)||0) - ((b.d.criadoEm&&b.d.criadoEm.seconds)||0));
+  docs.forEach(({id,d})=>{
+    const disc = d.disciplina;
+    if(!DATA[disc]) DATA[disc]=[]; // disciplina fora da lista padrão também é aceita
+    DATA[disc].push(licaoDeDoc(id, d));
+  });
+  // primeira execução com banco vazio → semeia os exemplos uma vez
+  if(docs.length===0 && !localStorage.getItem(SEED_FLAG)){
+    await seedFirestore();
+  }
+  try{ localStorage.setItem(SEED_FLAG, "1"); }catch(e){}
+}
+
+// Semeia o Firestore com as lições de exemplo (uma única vez).
+async function seedFirestore(){
+  const seed = seedData();
+  for(const sid of Object.keys(seed)){
+    for(const licao of seed[sid]){
+      const ref = await db.collection("licoes").add({
+        disciplina: sid,
+        titulo: licao.titulo,
+        conteudo: licao.texto,
+        exercicios: licao.exercicios,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      if(!DATA[sid]) DATA[sid]=[];
+      DATA[sid].push({ id:ref.id, titulo:licao.titulo, texto:licao.texto, exercicios:licao.exercicios });
+    }
+  }
+}
 
 function defaultProfile(){
   const p={ nome:"Aluno(a)", xpTotal:0, streak:0, ultimoDia:null, medalhas:[], som:true, disciplinas:{} };
@@ -1321,10 +1386,17 @@ function editLesson(id){
   Teacher.editingLesson = JSON.parse(JSON.stringify(l));
   resetIaEstado(); Teacher.tab="novo"; render();
 }
-function deleteLesson(id){
+async function deleteLesson(id){
   if(!confirm("Excluir esta lição e todos os seus exercícios?")) return;
-  DATA[Teacher.subj]=(DATA[Teacher.subj]||[]).filter(l=>l.id!==id);
-  saveData(); toast("Lição excluída."); render();
+  toast("Excluindo...");
+  try{
+    await db.collection("licoes").doc(id).delete();
+    removeLicaoLocal(id);
+    toast("Lição excluída.");
+    render();
+  }catch(e){
+    toast("Erro ao excluir. Verifique a conexão.");
+  }
 }
 
 // --- ABA: editor de lição + exercícios ---
@@ -1595,7 +1667,7 @@ function removeOpt(i,j){
   render();
 }
 
-function saveLesson(){
+async function saveLesson(){
   syncTextInputs();
   const L=Teacher.editingLesson;
   if(!L.titulo.trim()){ toast("Dê um título à lição."); return; }
@@ -1609,17 +1681,34 @@ function saveLesson(){
       if(ex.opcoes.some(o=>!o.trim())){ toast(`Exercício ${k+1}: preencha todas as opções.`); return; }
     }
   }
-  if(!DATA[Teacher.subj]) DATA[Teacher.subj]=[];
-  if(L.id){ // editar existente
-    const arr=DATA[Teacher.subj]; const idx=arr.findIndex(l=>l.id===L.id);
-    if(idx>=0) arr[idx]=L; else arr.push(L);
-  } else { // nova
-    L.id=uid(); DATA[Teacher.subj].push(L);
+
+  const disc = Teacher.subj;
+  const payload = {
+    disciplina: disc,
+    titulo: L.titulo,
+    conteudo: L.texto,
+    exercicios: L.exercicios
+  };
+  toast("Salvando...");
+  try{
+    if(L.id){ // editar existente
+      await db.collection("licoes").doc(L.id).set(payload, { merge:true });
+    } else { // nova
+      payload.criadoEm = firebase.firestore.FieldValue.serverTimestamp();
+      const ref = await db.collection("licoes").add(payload);
+      L.id = ref.id;
+    }
+    // atualiza o estado local (remove de onde estava e re-adiciona na disciplina atual)
+    removeLicaoLocal(L.id);
+    if(!DATA[disc]) DATA[disc]=[];
+    DATA[disc].push({ id:L.id, titulo:L.titulo, texto:L.texto, exercicios:L.exercicios });
+
+    Teacher.editingLesson=null; Teacher.tab="licoes";
+    toast("Lição salva com sucesso! ✅");
+    render();
+  }catch(e){
+    toast("Erro ao salvar. Verifique a conexão e tente novamente.");
   }
-  saveData();
-  Teacher.editingLesson=null; Teacher.tab="licoes";
-  toast("Lição salva com sucesso! ✅");
-  render();
 }
 
 // --- ABA: progresso do aluno ---
@@ -1660,16 +1749,48 @@ window.App = {
   setExEnun, setExResp, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
   // IA
   gerarExerciciosIA, toggleIaConfig, salvarChaveIA, setModoIA,
+  // sistema
+  retryBoot: function(){ boot(); },
 };
 
 // Enter no campo de senha
 document.getElementById("pwInput").addEventListener("keydown",e=>{ if(e.key==="Enter") checkPassword(); });
 
-// Boot
-loadData();
-loadProfile();
-loadIA();
-render();
+// ----- Telas globais de carregamento / erro -----
+function mostrarCarregando(msg){
+  app.innerHTML = `<div class="screen active">
+    <div class="content" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+      ${mascot('bounce')}
+      <div class="ia-loading" style="color:var(--brand)"><span class="ia-spinner"></span> ${esc(msg)}</div>
+    </div>
+  </div>`;
+}
+function mostrarErroConexao(){
+  app.innerHTML = `<div class="screen active">
+    <div class="content" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+      <div style="font-size:60px">📡</div>
+      <h1 style="color:var(--red);font-size:22px;margin:8px 0">Ops! Sem conexão</h1>
+      <p style="color:#777;margin-bottom:20px">Não foi possível carregar as lições do servidor.<br>Verifique sua internet e tente novamente.</p>
+      <button class="btn" onclick="App.retryBoot()">🔄 Tentar novamente</button>
+    </div>
+  </div>`;
+}
+
+// Boot — perfil/IA do localStorage; lições do Firestore
+async function boot(){
+  loadProfile();
+  loadIA();
+  SUBJECTS.forEach(s=> DATA[s.id]=DATA[s.id]||[]);
+  mostrarCarregando("Carregando lições...");
+  try{
+    initFirebase();
+    await loadLicoes();
+    State.tela="home"; render();
+  }catch(e){
+    mostrarErroConexao();
+  }
+}
+boot();
 
 })();
 </script>
