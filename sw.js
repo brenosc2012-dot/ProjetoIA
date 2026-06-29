@@ -5,8 +5,8 @@
    - Outros GET same-origin (manifest, ícone): stale-while-revalidate.
    - Cross-origin (Firebase/Firestore/CDN): não intercepta — vai direto à rede.
    Bump a versão do cache quando os assets em ASSETS mudarem. */
-const CACHE = "estudamais-v1";
-const ASSETS = ["./", "./index.html", "./manifest.json", "./icon.svg"];
+const CACHE = "estudamais-v2";
+const ASSETS = ["./", "./index.html", "./manifest.json", "./icon.svg", "./icon-192.png", "./icon-512.png", "./icon-180.png"];
 
 self.addEventListener("install", (e)=>{
   e.waitUntil(
