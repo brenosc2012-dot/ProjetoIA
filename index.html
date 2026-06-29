@@ -1478,7 +1478,7 @@ O resumo deve:
 ${pub.frase}
 Conteúdo da lição: ${l.texto}`;
   try{
-    const texto = await chamarIA(prompt);
+    const texto = await chamarIA(prompt, 20000);
     if(!texto.trim()) throw new Error("vazio");
     resumoCache[lid]=texto;
     salvarLicaoGerada(lid, { resumo:texto, exercicios:l.exercicios });
@@ -1687,9 +1687,13 @@ function nextExercise(){
 }
 
 // ----- EXPLICAÇÃO DO ERRO (gerada por IA) -----
+const IA_EXPLIC_TIMEOUT = 10000; // 10s: se a IA não responder, mostra explicação padrão
+let explicacaoEmAndamento = false; // evita chamadas simultâneas à IA
 async function gerarExplicacao(){
   // se o aluno saiu da atividade nesse meio tempo, não faz nada
   if(State.tela!=="exercise" || !Sess || Sess.acertouAtual) return;
+  // já existe uma geração em andamento → não dispara outra (evita loop/concorrência)
+  if(explicacaoEmAndamento) return;
   const l=getLesson();
   if(!l || !Sess.exercicios || !Sess.exercicios[Sess.idx]){
     mostrarExplicacao("Tudo bem errar — faz parte do aprendizado! 😊 Releia o resumo com calma e tente de novo. Você consegue! 💪", "");
@@ -1699,6 +1703,8 @@ async function gerarExplicacao(){
   const exId = ex.id;
   const respCorreta = ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : "");
   const padrao = "Tudo bem errar — é assim que a gente aprende! 😊 A resposta certa é \""+respCorreta+"\". Releia o resumo com calma e tente de novo. Você consegue! 💪";
+  // mensagem exibida quando a IA falha ou estoura o tempo (timeout)
+  const falha = `Ops! Não consegui gerar a explicação agora. A resposta correta é "${respCorreta}". Continue praticando! 💪`;
 
   const myLesson=State.lesson, myIdx=Sess.idx;
   const aindaValido=()=> State.tela==="exercise" && Sess && State.lesson===myLesson && Sess.idx===myIdx && !Sess.acertouAtual;
@@ -1727,11 +1733,12 @@ Gere uma explicação curta e acolhedora que:
 - Termine com uma frase de incentivo
 - Tenha no máximo 100 palavras
 ${pub.frase}`;
+  explicacaoEmAndamento = true;
   try{
-    const txt = await chamarIA(prompt);
-    const final = txt.trim() || padrao;
+    const txt = await chamarIA(prompt, IA_EXPLIC_TIMEOUT);
+    const final = (txt && txt.trim()) || padrao;
     // persiste a explicação no Firestore (compartilha com os outros dispositivos)
-    if(txt.trim() && exId){
+    if(txt && txt.trim() && exId){
       l.explicacoes = l.explicacoes || {};
       l.explicacoes[exId] = final;
       const upd={}; upd["explicacoes."+exId]=final;
@@ -1739,7 +1746,10 @@ ${pub.frase}`;
     }
     if(aindaValido()) mostrarExplicacao(final, respCorreta);
   }catch(e){
-    if(aindaValido()) mostrarExplicacao(padrao, respCorreta);
+    // erro de rede, 401/429 ou timeout → sempre mostra a tela de explicação (com o botão)
+    if(aindaValido()) mostrarExplicacao(falha, respCorreta);
+  }finally{
+    explicacaoEmAndamento = false;
   }
 }
 
@@ -1778,7 +1788,7 @@ Gere uma explicação curta e acolhedora que:
 - Tenha no máximo 100 palavras
 ${pub.frase}`;
       try{
-        const txt = await chamarIA(prompt);
+        const txt = await chamarIA(prompt, 12000);
         const final = (txt||"").trim();
         if(final){
           l.explicacoes[ex.id] = final;
@@ -2219,7 +2229,7 @@ O resumo deve:
 ${pub.frase}
 Conteúdo da lição: ${conteudo}`;
   try{
-    const texto=await chamarIA(prompt);
+    const texto=await chamarIA(prompt, 20000);
     if(!texto.trim()) throw new Error("A IA retornou um resumo vazio. Tente novamente.");
     delete resumoCache[L.id];
     salvarLicaoGerada(L.id, { resumo:texto, exercicios:L.exercicios });
@@ -2228,26 +2238,40 @@ Conteúdo da lição: ${conteudo}`;
   }catch(err){
     Teacher.regenerando=false;
     let msg=err&&err.message?err.message:"Falha ao contatar a IA.";
-    if(/Failed to fetch|NetworkError/i.test(msg)) msg="Não foi possível conectar. Verifique a internet e a chave.";
+    if(msg==="timeout") msg="A IA demorou demais para responder. Tente novamente.";
+    else if(/Failed to fetch|NetworkError/i.test(msg)) msg="Não foi possível conectar. Verifique a internet e a chave.";
     Teacher.iaErro=msg; render();
   }
 }
 
-// Chamada genérica à API do Groq (compatível com OpenAI). Retorna o texto; lança Error em falha.
-async function chamarIA(prompt){
+// Chamada genérica à API da OpenAI. Retorna o texto; lança Error em falha.
+// timeoutMs (opcional): aborta a requisição e lança Error("timeout") se estourar.
+async function chamarIA(prompt, timeoutMs){
   if(!IA.apiKey.trim()) throw new Error("Sem chave de API configurada.");
-  const resp = await fetch(IA_ENDPOINT, {
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "Authorization":"Bearer " + IA.apiKey.trim()
-    },
-    body: JSON.stringify({
-      model: IA_MODELO,
-      messages:[{ role:"user", content: prompt }],
-      temperature: 0.7
-    })
-  });
+  const ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
+  let timer=null, expirou=false;
+  if(ctrl && timeoutMs){ timer=setTimeout(()=>{ expirou=true; try{ ctrl.abort(); }catch(_){} }, timeoutMs); }
+  let resp;
+  try{
+    resp = await fetch(IA_ENDPOINT, {
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "Authorization":"Bearer " + IA.apiKey.trim()
+      },
+      body: JSON.stringify({
+        model: IA_MODELO,
+        messages:[{ role:"user", content: prompt }],
+        temperature: 0.7
+      }),
+      signal: ctrl ? ctrl.signal : undefined
+    });
+  }catch(e){
+    if(expirou || (e && e.name==="AbortError")) throw new Error("timeout");
+    throw e;
+  }finally{
+    if(timer) clearTimeout(timer);
+  }
   if(!resp.ok){
     let detalhe="";
     try{ const e=await resp.json(); detalhe = e.error && e.error.message ? e.error.message : ""; }catch(_){}
@@ -2291,7 +2315,7 @@ O campo "nivel" deve ser exatamente "facil", "intermediario" ou "dificil".
 Conteúdo da lição: ${conteudo}`;
 
   try{
-    const texto = await chamarIA(prompt);
+    const texto = await chamarIA(prompt, 45000);
     const novos = parseExerciciosIA(texto);
     if(!novos.length) throw new Error("A IA não retornou exercícios reconhecíveis. Tente novamente.");
 
@@ -2305,7 +2329,8 @@ Conteúdo da lição: ${conteudo}`;
   }catch(err){
     Teacher.gerando=false;
     let msg = err && err.message ? err.message : "Falha ao contatar a IA.";
-    if(/Failed to fetch|NetworkError/i.test(msg)) msg = "Não foi possível conectar. Verifique sua internet e a chave da API.";
+    if(msg==="timeout") msg = "A IA demorou demais para responder. Tente novamente.";
+    else if(/Failed to fetch|NetworkError/i.test(msg)) msg = "Não foi possível conectar. Verifique sua internet e a chave da API.";
     Teacher.iaErro = msg;
     render();
   }
