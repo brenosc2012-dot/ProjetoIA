@@ -351,14 +351,31 @@ const NIVEIS_ENSINO = [
 function nivelById(id){ return NIVEIS_ENSINO.find(n=>n.id===id) || NIVEIS_ENSINO[0]; }
 function nomeNivel(id){ return nivelById(id).nome; }
 
-// Descreve a faixa etária do aluno para adaptar a linguagem da IA.
+// Estima a idade típica a partir do nível/ano (Fund. I começa aos ~6 anos).
+function idadeAproximada(nivelId, ano){
+  const n = nivelById(nivelId);
+  const base = ({ fund1:6, fund2:11, medio:15 })[n.id] || 10;
+  const i = n.anos.indexOf(ano);
+  return base + (i>=0 ? i : 0);
+}
+// Frase de adaptação enviada à IA (linguagem/complexidade por faixa etária).
+function fraseAdaptacao(nivelId, ano, idade){
+  return `Adapte a linguagem e a complexidade para um aluno do ${ano} do ${nomeNivel(nivelId)}, com aproximadamente ${idade} anos.`;
+}
+// Descreve a faixa etária do ALUNO logado para adaptar a linguagem da IA.
 function descreverPublico(aluno){
   const a = aluno || ALUNO || {};
-  const ano = a.ano || "5º ano";
-  const nivel = nomeNivel(a.nivel || "fund1");
-  const idade = a.idade ? a.idade : 10;
-  return { ano, nivel, idade,
-    frase:`Adapte a linguagem e a complexidade para um aluno do ${ano} do ${nivel}, com aproximadamente ${idade} anos.` };
+  const nivelId = a.nivel || "fund1";
+  const ano = a.ano || nivelById(nivelId).anos[0];
+  const idade = a.idade ? a.idade : idadeAproximada(nivelId, ano);
+  return { ano, nivel:nomeNivel(nivelId), idade, frase:fraseAdaptacao(nivelId, ano, idade) };
+}
+// Descreve a faixa etária ALVO de uma lição (usada na geração pelo professor).
+function descreverPublicoLicao(L){
+  const nivelId = (L && L.nivel) || "fund1";
+  const ano = (L && L.ano) || nivelById(nivelId).anos[0];
+  const idade = idadeAproximada(nivelId, ano);
+  return { ano, nivelId, idade, frase:fraseAdaptacao(nivelId, ano, idade) };
 }
 
 // ----- Firebase / Firestore -----
@@ -832,8 +849,22 @@ function mascot(cls){
    C) GAMIFICAÇÃO
    ============================================================ */
 const XP_POR_NIVEL = 50;       // XP necessário por nível em cada disciplina
-const XP_POR_ACERTO = 10;
+const XP_POR_ACERTO = 10;      // XP padrão (questões antigas, sem dificuldade)
 const XP_BONUS_LICAO = 20;     // bônus ao concluir lição
+// XP por acerto conforme a dificuldade da questão (item 6)
+const XP_POR_DIFICULDADE = { facil:10, intermediario:20, dificil:30 };
+function xpDaQuestao(ex){ return (ex && XP_POR_DIFICULDADE[ex.nivel]) || XP_POR_ACERTO; }
+// Ordem crescente de dificuldade (questões sem nível ficam no meio, ordem estável)
+const ORDEM_NIVEL = { facil:0, intermediario:1, dificil:2 };
+function ordenarPorDificuldade(arr){
+  return arr.map((ex,i)=>({ex,i})).sort((a,b)=>{
+    const na = ORDEM_NIVEL[a.ex.nivel]!==undefined ? ORDEM_NIVEL[a.ex.nivel] : 1;
+    const nb = ORDEM_NIVEL[b.ex.nivel]!==undefined ? ORDEM_NIVEL[b.ex.nivel] : 1;
+    return na-nb || a.i-b.i;
+  }).map(o=>o.ex);
+}
+function nivelDificuldadeLabel(n){ return n==="facil"?"Fácil":(n==="intermediario"?"Intermediário":(n==="dificil"?"Difícil":"")); }
+function nivelDificuldadeCor(n){ return n==="facil"?"#58cc02":(n==="intermediario"?"#ffa502":(n==="dificil"?"#ff4b4b":"#afafaf")); }
 
 function nivelDe(xp){ return Math.floor(xp / XP_POR_NIVEL) + 1; }
 function xpNoNivel(xp){ return xp % XP_POR_NIVEL; }
@@ -849,10 +880,10 @@ function atualizarStreak(){
   saveProfile();
 }
 
-// Concede recompensas ao concluir uma lição
-function concederRecompensa(subjId, lessonId, acertos){
+// Concede recompensas ao concluir uma lição (xpAcertos = soma do XP por dificuldade)
+function concederRecompensa(subjId, lessonId, xpAcertos){
   const d = PROFILE.disciplinas[subjId];
-  const ganho = acertos*XP_POR_ACERTO + XP_BONUS_LICAO;
+  const ganho = xpAcertos + XP_BONUS_LICAO;
   const nivelAntes = nivelDe(d.xp);
   d.xp += ganho;
   PROFILE.xpTotal += ganho;
@@ -884,7 +915,8 @@ function statsProgresso(){
   let totalConcl=0, discComConcl=0, nivelMax=1;
   SUBJECTS.forEach(s=>{
     const d=PROFILE.disciplinas[s.id];
-    const f=d.licoesConcluidas.filter(id=>(DATA[s.id]||[]).some(l=>l.id===id)).length;
+    const vis=licoesDoAluno(s.id);
+    const f=d.licoesConcluidas.filter(id=>vis.some(l=>l.id===id)).length;
     totalConcl+=f; if(f>0) discComConcl++; if(d.nivel>nivelMax) nivelMax=d.nivel;
   });
   return { totalConcl, discComConcl, nivelMax };
@@ -1181,13 +1213,17 @@ function irTela(t){ State.authErro=""; State.authBusy=false; if(t==="admin") Sta
 // ----- HOME: seleção de disciplinas -----
 function renderHome(){
   atualizarStreak();
-  const totalLicoes = SUBJECTS.reduce((a,s)=>a+(DATA[s.id]?DATA[s.id].length:0),0);
-  const concl = SUBJECTS.reduce((a,s)=>a+PROFILE.disciplinas[s.id].licoesConcluidas.length,0);
+  const totalLicoes = SUBJECTS.reduce((a,s)=>a+licoesDoAluno(s.id).length,0);
+  const concl = SUBJECTS.reduce((a,s)=>{
+    const vis=licoesDoAluno(s.id);
+    return a + PROFILE.disciplinas[s.id].licoesConcluidas.filter(id=>vis.some(l=>l.id===id)).length;
+  },0);
 
   let cards = SUBJECTS.map(s=>{
     const d = PROFILE.disciplinas[s.id];
-    const total = (DATA[s.id]||[]).length;
-    const feitas = d.licoesConcluidas.filter(id=> (DATA[s.id]||[]).some(l=>l.id===id)).length;
+    const vis = licoesDoAluno(s.id);
+    const total = vis.length;
+    const feitas = d.licoesConcluidas.filter(id=> vis.some(l=>l.id===id)).length;
     return `<div class="subj-card" style="background:${s.cor}" onclick="App.openSubject('${s.id}')">
       <span class="lvl-badge">Nv ${d.nivel}</span>
       <div class="icon">${s.icon}</div>
@@ -1227,10 +1263,10 @@ function renderHome(){
 function openSubject(id){ clearInterval(estudoTimer); State.subj=id; State.tela="lessons"; render(); }
 function renderLessons(){
   const s = subjById(State.subj); const d=PROFILE.disciplinas[s.id];
-  const licoes = DATA[s.id]||[];
+  const licoes = licoesDoAluno(s.id);
   let list;
   if(licoes.length===0){
-    list = `<div class="empty"><div class="em">📭</div><p>Nenhuma lição cadastrada ainda.<br>Peça ao professor para adicionar!</p></div>`;
+    list = `<div class="empty"><div class="em">📭</div><p>Nenhuma lição para a sua turma ainda.<br>Peça ao professor para adicionar!</p></div>`;
   } else {
     list = licoes.map((l,i)=>{
       const feita = d.licoesConcluidas.indexOf(l.id)>=0;
@@ -1255,6 +1291,17 @@ function renderLessons(){
     <div class="content" style="background:#f7fbff">${list}</div>
   </div>`;
 }
+
+// ----- Escopo de lições: o aluno só vê as da sua turma/ano/nível -----
+// Campos vazios na lição significam "todas" (ex.: conteúdo de exemplo).
+function licaoVisivel(l){
+  if(!ALUNO) return true;
+  const okTurma = !l.turma || l.turma===ALUNO.turma;
+  const okAno   = !l.ano   || l.ano===ALUNO.ano;
+  const okNivel = !l.nivel || l.nivel===ALUNO.nivel;
+  return okTurma && okAno && okNivel;
+}
+function licoesDoAluno(subjId){ return (DATA[subjId]||[]).filter(licaoVisivel); }
 
 // ----- TELA DE ESTUDO (resumo gerado por IA, antes das atividades) -----
 function getLesson(){ return (DATA[State.subj]||[]).find(l=>l.id===State.lesson); }
@@ -1281,15 +1328,17 @@ async function openLesson(lid){
 
   // 4) gera o resumo pela IA e salva no Firestore para os outros dispositivos
   State.estudo={ status:"loading" }; render();
+  const pub = descreverPublico(ALUNO);
   const prompt =
-`Você é um professor do 5º ano do Ensino Fundamental (Sistema Positivo).
-Com base no conteúdo abaixo, crie um resumo didático e detalhado para uma criança de 10 anos estudar antes de responder exercícios.
+`Você é um professor do ${pub.ano} do ${pub.nivel}.
+Com base no conteúdo abaixo, crie um resumo didático e detalhado para o aluno estudar antes de responder exercícios.
 O resumo deve:
-- Ter linguagem simples, clara e animada
-- Usar exemplos do cotidiano de uma criança
+- Ter linguagem clara e animada
+- Usar exemplos do cotidiano adequados à faixa etária
 - Destacar os pontos mais importantes em tópicos
 - Ter no máximo 300 palavras
 - Incluir uma dica de memorização no final
+${pub.frase}
 Conteúdo da lição: ${l.texto}`;
   try{
     const texto = await chamarIA(prompt);
@@ -1382,13 +1431,16 @@ function startExercises(){
   Sound.init(); // habilita áudio após o toque do usuário
   const l=getLesson();
   if(!l || l.exercicios.length===0){ openSubject(State.subj); return; }
-  Sess = { idx:0, vidas:3, acertos:0, respondido:false, acertouAtual:false, selecionado:null, respAluno:"", total:l.exercicios.length };
+  // resolve em ordem crescente de dificuldade (fácil → intermediário → difícil)
+  const ordenados = ordenarPorDificuldade(l.exercicios);
+  Sess = { idx:0, vidas:3, acertos:0, erros:0, xpGanho:0, respondido:false, acertouAtual:false,
+           selecionado:null, respAluno:"", total:ordenados.length, exercicios:ordenados };
   State.tela="exercise"; render();
 }
 
 function renderExercise(){
-  const s=subjById(State.subj); const l=getLesson();
-  const ex = l.exercicios[Sess.idx];
+  const s=subjById(State.subj);
+  const ex = Sess.exercicios[Sess.idx];
   const progresso = (Sess.idx / Sess.total)*100;
   const hearts = "❤️".repeat(Sess.vidas) + "🤍".repeat(3-Sess.vidas);
 
@@ -1441,7 +1493,10 @@ function renderExercise(){
       <div class="hearts">${hearts}</div>
     </div>
     <div class="content">
-      <div style="margin-bottom:6px"><span class="pill-tag" style="background:${s.cor}">${tipoLabel(ex.tipo)}</span></div>
+      <div style="margin-bottom:6px;display:flex;gap:6px;align-items:center">
+        <span class="pill-tag" style="background:${s.cor}">${tipoLabel(ex.tipo)}</span>
+        ${ex.nivel?`<span class="pill-tag" style="background:${nivelDificuldadeCor(ex.nivel)}">${nivelDificuldadeLabel(ex.nivel)} • +${xpDaQuestao(ex)} XP</span>`:''}
+      </div>
       <div class="q-prompt">${esc(ex.enunciado)}</div>
       <div id="optWrap">${body}</div>
     </div>
@@ -1461,13 +1516,13 @@ function onFillInput(){
 }
 
 function checkAnswer(){
-  const l=getLesson(); const ex=l.exercicios[Sess.idx];
+  const ex=Sess.exercicios[Sess.idx];
   let ok=false;
   if(ex.tipo==="fill"){
-    const val=document.getElementById("fillAns").value;
-    if(!val.trim()) return;
-    Sess.respAluno=val;
-    ok = norm(val)===norm(ex.resposta);
+    const resp=document.getElementById("fillAns").value;
+    if(!resp.trim()) return;
+    Sess.respAluno=resp;
+    ok = norm(resp)===norm(ex.resposta);
   } else {
     if(Sess.selecionado===null) return;
     Sess.respAluno = (ex.opcoes? ex.opcoes[Sess.selecionado] : "");
@@ -1475,9 +1530,9 @@ function checkAnswer(){
   }
   Sess.respondido=true; Sess.acertouAtual=ok;
   if(ok){
-    Sess.acertos++; Sound.correct(); renderExercise();
+    Sess.acertos++; Sess.xpGanho += xpDaQuestao(ex); Sound.correct(); renderExercise();
   } else {
-    Sess.vidas--; Sound.wrong(); renderExercise();
+    Sess.erros++; Sess.vidas--; Sound.wrong(); renderExercise();
     const wrap=document.getElementById("optWrap");
     if(wrap) wrap.classList.add("shake");
     // mostra o feedback vermelho por um instante e então gera a explicação por IA
@@ -1501,11 +1556,11 @@ async function gerarExplicacao(){
   // se o aluno saiu da atividade nesse meio tempo, não faz nada
   if(State.tela!=="exercise" || !Sess || Sess.acertouAtual) return;
   const l=getLesson();
-  if(!l || !l.exercicios || !l.exercicios[Sess.idx]){
+  if(!l || !Sess.exercicios || !Sess.exercicios[Sess.idx]){
     mostrarExplicacao("Tudo bem errar — faz parte do aprendizado! 😊 Releia o resumo com calma e tente de novo. Você consegue! 💪", "");
     return;
   }
-  const ex=l.exercicios[Sess.idx];
+  const ex=Sess.exercicios[Sess.idx];
   const exId = ex.id;
   const respCorreta = ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : "");
   const padrao = "Tudo bem errar — é assim que a gente aprende! 😊 A resposta certa é \""+respCorreta+"\". Releia o resumo com calma e tente de novo. Você consegue! 💪";
@@ -1521,9 +1576,10 @@ async function gerarExplicacao(){
   // 2) sem chave neste aparelho → mensagem padrão acolhedora
   if(!IA.apiKey.trim()){ if(aindaValido()) mostrarExplicacao(padrao, respCorreta); return; }
 
+  const pub = descreverPublico(ALUNO);
   const prompt =
-`Você é um professor gentil e encorajador do 5º ano do Ensino Fundamental.
-Um aluno de 10 anos errou a seguinte questão:
+`Você é um professor gentil e encorajador do ${pub.ano} do ${pub.nivel}.
+Um aluno de aproximadamente ${pub.idade} anos errou a seguinte questão:
 Enunciado: ${ex.enunciado}
 Resposta do aluno: ${Sess.respAluno||"(em branco)"}
 Resposta correta: ${respCorreta}
@@ -1535,7 +1591,7 @@ Gere uma explicação curta e acolhedora que:
 - Use um exemplo do cotidiano para ilustrar
 - Termine com uma frase de incentivo
 - Tenha no máximo 100 palavras
-- Use linguagem adequada para uma criança de 10 anos`;
+${pub.frase}`;
   try{
     const txt = await chamarIA(prompt);
     const final = txt.trim() || padrao;
@@ -1568,12 +1624,13 @@ async function pregerarExplicacoes(l){
   const faltando = (l.exercicios||[]).filter(ex=> ex.id && !l.explicacoes[ex.id]);
   if(!faltando.length) return;
   pregerando = true;
+  const pub = descreverPublicoLicao(l);
   try{
     for(const ex of faltando){
       const respCorreta = ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : "");
       const prompt =
-`Você é um professor gentil e encorajador do 5º ano do Ensino Fundamental.
-Uma criança de 10 anos pode errar a seguinte questão:
+`Você é um professor gentil e encorajador do ${pub.ano} do ${nomeNivel(pub.nivelId)}.
+Um aluno de aproximadamente ${pub.idade} anos pode errar a seguinte questão:
 Enunciado: ${ex.enunciado}
 Resposta correta: ${respCorreta}
 Conteúdo da lição: ${l.texto}
@@ -1584,7 +1641,7 @@ Gere uma explicação curta e acolhedora que:
 - Use um exemplo do cotidiano para ilustrar
 - Termine com uma frase de incentivo
 - Tenha no máximo 100 palavras
-- Use linguagem adequada para uma criança de 10 anos`;
+${pub.frase}`;
       try{
         const txt = await chamarIA(prompt);
         const final = (txt||"").trim();
@@ -1639,7 +1696,7 @@ function gameOver(){
 
 function finishLesson(){
   const perfeito = Sess.acertos===Sess.total;
-  const r = concederRecompensa(State.subj, State.lesson, Sess.acertos);
+  const r = concederRecompensa(State.subj, State.lesson, Sess.xpGanho);
   const novasMedalhas = verificarMedalhas({ perfeito:perfeito });
   State.tela="done"; State._reward=r; State._medalhas=novasMedalhas; render();
 }
@@ -1704,8 +1761,9 @@ function renderProfile(){
   let rows = SUBJECTS.map(s=>{
     const d=PROFILE.disciplinas[s.id];
     const prog = xpNoNivel(d.xp)/XP_POR_NIVEL*100;
-    const total=(DATA[s.id]||[]).length;
-    const feitas=d.licoesConcluidas.filter(id=>(DATA[s.id]||[]).some(l=>l.id===id)).length;
+    const vis=licoesDoAluno(s.id);
+    const total=vis.length;
+    const feitas=d.licoesConcluidas.filter(id=>vis.some(l=>l.id===id)).length;
     return `<div class="card" style="cursor:default">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:24px">${s.icon}</span>
@@ -1794,7 +1852,7 @@ function teacherLessonsTab(){
     list = `<div class="empty"><div class="em">📝</div><p>Nenhuma lição nesta disciplina.<br>Crie uma na aba "Nova".</p></div>`;
   } else {
     list = licoes.map(l=>`<div class="t-lesson-row">
-      <div class="info"><div class="t">${esc(l.titulo)}</div><div class="d">${l.exercicios.length} exercício(s)</div></div>
+      <div class="info"><div class="t">${esc(l.titulo)}</div><div class="d">${l.exercicios.length} exercício(s) • ${esc(escopoLicaoLabel(l))}</div></div>
       <button class="icon-btn" title="Editar" onclick="App.editLesson('${l.id}')">✏️</button>
       <button class="icon-btn" title="Excluir" onclick="App.deleteLesson('${l.id}')">🗑️</button>
     </div>`).join("");
@@ -1806,10 +1864,18 @@ function teacherLessonsTab(){
 function subjSelect(val, onchange){
   return `<select onchange="${onchange}">${SUBJECTS.map(s=>`<option value="${s.id}" ${s.id===val?'selected':''}>${s.icon} ${esc(s.nome)}</option>`).join("")}</select>`;
 }
+// Rótulo do escopo de uma lição (nível/ano/turma) para o professor.
+function escopoLicaoLabel(l){
+  const parts=[];
+  if(l.nivel) parts.push(nomeNivel(l.nivel));
+  if(l.ano) parts.push(l.ano);
+  parts.push(l.turma ? ("Turma "+l.turma) : "Todas as turmas");
+  return parts.join(" • ");
+}
 function teacherSelectSubj(v){ Teacher.subj=v; render(); }
 
 function resetIaEstado(){ Teacher.gerando=false; Teacher.iaErro=""; Teacher.iaConfigAberta=false; }
-function newLesson(){ Teacher.editingLesson={ id:null, titulo:"", texto:"", exercicios:[] }; resetIaEstado(); Teacher.tab="novo"; render(); }
+function newLesson(){ Teacher.editingLesson={ id:null, titulo:"", texto:"", exercicios:[], turma:"", nivel:"", ano:"" }; resetIaEstado(); Teacher.tab="novo"; render(); }
 function editLesson(id){
   const l=(DATA[Teacher.subj]||[]).find(x=>x.id===id);
   if(!l) return;
@@ -1838,12 +1904,27 @@ function teacherEditorTab(){
   let exs = L.exercicios.map((ex,i)=>exEditorCard(ex,i)).join("");
   if(L.exercicios.length===0) exs=`<p style="color:var(--gray-d);text-align:center;padding:10px">Nenhum exercício ainda. Adicione abaixo 👇</p>`;
 
+  const profTurmas = (PROFESSOR && Array.isArray(PROFESSOR.turmas)) ? PROFESSOR.turmas.slice() : [];
+  if(L.turma && profTurmas.indexOf(L.turma)<0) profTurmas.push(L.turma);
+  const turmaOpts = `<option value="">Todas as turmas</option>` + profTurmas.map(t=>`<option value="${esc(t)}" ${L.turma===t?'selected':''}>Turma ${esc(t)}</option>`).join("");
+  const nivelOpts = `<option value="">Todos os níveis</option>` + NIVEIS_ENSINO.map(n=>`<option value="${n.id}" ${L.nivel===n.id?'selected':''}>${esc(n.nome)}</option>`).join("");
+  const anoOpts = `<option value="">Todos os anos</option>` + (L.nivel?nivelById(L.nivel).anos:[]).map(a=>`<option value="${esc(a)}" ${L.ano===a?'selected':''}>${esc(a)}</option>`).join("");
+
   return `<div class="sec-title">${L.id?'Editando lição':'Nova lição'}</div>
     <label>Disciplina</label>${sel}
     <label>Título da lição</label>
     <input id="lTitulo" value="${esc(L.titulo)}" placeholder="Ex: Frações Simples">
     <label>Texto explicativo / material de estudo</label>
     <textarea id="lTexto" placeholder="Escreva o conteúdo da lição aqui...">${esc(L.texto)}</textarea>
+
+    <div class="sec-title">Destinada a (escopo)</div>
+    <p style="font-size:12px;color:#999;margin:-2px 0 8px">Deixe "Todos/Todas" para liberar a lição a qualquer turma/ano.</p>
+    <label>Nível de ensino</label>
+    <select id="lNivel" onchange="App.onLessonNivel(this.value)">${nivelOpts}</select>
+    <label>Ano</label>
+    <select id="lAno">${anoOpts}</select>
+    <label>Turma</label>
+    <select id="lTurma">${turmaOpts}</select>
 
     ${iaPanel(L)}
 
@@ -1935,17 +2016,24 @@ async function gerarExerciciosIA(){
 
   Teacher.gerando=true; Teacher.iaErro=""; render();
 
+  const pub = descreverPublicoLicao(L);
   const prompt =
-`Você é um professor do 5º ano do Ensino Fundamental (Sistema Positivo).
-Com base no conteúdo abaixo, gere 5 exercícios variados para crianças de 10 anos.
-Use os tipos: múltipla escolha (3 exercícios), verdadeiro/falso (1 exercício) e completar lacunas (1 exercício).
-O nível deve ser adequado ao 5º ano: linguagem simples, exemplos do cotidiano.
+`Você é um professor do ${pub.ano} do ${nomeNivel(pub.nivelId)}.
+Com base no conteúdo abaixo, gere exatamente 15 exercícios divididos em:
+- 5 questões fáceis (conceitos básicos, linguagem simples)
+- 5 questões intermediárias (aplicação do conceito)
+- 5 questões difíceis (raciocínio, interpretação e análise)
+
+${pub.frase}
+
+Tipos permitidos: múltipla escolha (4 opções), verdadeiro/falso, completar lacunas.
 Retorne APENAS um JSON válido, sem explicações, no formato:
 [
-  {"tipo": "multipla_escolha", "enunciado": "...", "opcoes": ["A", "B", "C", "D"], "resposta_correta": "A"},
-  {"tipo": "verdadeiro_falso", "enunciado": "...", "resposta_correta": "verdadeiro"},
-  {"tipo": "completar_lacunas", "enunciado": "O ___ é usado quando...", "resposta_correta": "palavra correta"}
+  {"nivel": "facil", "tipo": "multipla_escolha", "enunciado": "...", "opcoes": ["A","B","C","D"], "resposta_correta": "A"},
+  {"nivel": "intermediario", "tipo": "verdadeiro_falso", "enunciado": "...", "resposta_correta": "verdadeiro"},
+  {"nivel": "dificil", "tipo": "completar_lacunas", "enunciado": "O ___ é usado quando...", "resposta_correta": "palavra correta"}
 ]
+O campo "nivel" deve ser exatamente "facil", "intermediario" ou "dificil".
 Conteúdo da lição: ${conteudo}`;
 
   try{
@@ -1958,7 +2046,8 @@ Conteúdo da lição: ${conteudo}`;
 
     Teacher.gerando=false; Teacher.iaErro="";
     render();
-    toast(`✨ ${novos.length} exercícios gerados! Revise e salve.`);
+    const cont = contarPorDificuldade(novos);
+    toast(`✨ ${novos.length} exercícios (${cont.facil}F/${cont.intermediario}I/${cont.dificil}D)! Revise e salve.`);
   }catch(err){
     Teacher.gerando=false;
     let msg = err && err.message ? err.message : "Falha ao contatar a IA.";
@@ -1986,20 +2075,35 @@ function parseExerciciosIA(texto){
     if(!item || !item.enunciado) return;
     const tipo = String(item.tipo||"").toLowerCase();
     const resp = item.resposta_correta;
+    const nivel = normalizarNivelDif(item.nivel);
     if(tipo.indexOf("verdadeiro")>=0 || tipo==="vf"){
       const v = norm(resp);
-      out.push({ id:uid(), tipo:"vf", enunciado:String(item.enunciado),
+      out.push({ id:uid(), tipo:"vf", nivel, enunciado:String(item.enunciado),
         opcoes:["Verdadeiro","Falso"], correta:(v.charAt(0)==="v"||v==="true"||v==="1")?0:1 });
     } else if(tipo.indexOf("lacuna")>=0 || tipo.indexOf("completar")>=0 || tipo==="fill"){
-      out.push({ id:uid(), tipo:"fill", enunciado:String(item.enunciado), resposta:String(resp==null?"":resp) });
+      out.push({ id:uid(), tipo:"fill", nivel, enunciado:String(item.enunciado), resposta:String(resp==null?"":resp) });
     } else { // múltipla escolha (padrão)
       let opcoes = Array.isArray(item.opcoes)? item.opcoes.map(o=>String(o)) : [];
       if(opcoes.length<2) return;
       let correta = acharIndiceCorreto(opcoes, resp);
-      out.push({ id:uid(), tipo:"mc", enunciado:String(item.enunciado), opcoes, correta });
+      out.push({ id:uid(), tipo:"mc", nivel, enunciado:String(item.enunciado), opcoes, correta });
     }
   });
   return out;
+}
+// Normaliza o nível de dificuldade vindo da IA (ignora acentos/variações).
+function normalizarNivelDif(v){
+  const n=norm(v);
+  if(n.indexOf("facil")>=0) return "facil";
+  if(n.indexOf("interm")>=0) return "intermediario";
+  if(n.indexOf("dific")>=0) return "dificil";
+  return "";
+}
+// Conta quantas questões há de cada dificuldade.
+function contarPorDificuldade(arr){
+  const c={ facil:0, intermediario:0, dificil:0 };
+  (arr||[]).forEach(ex=>{ if(c[ex.nivel]!==undefined) c[ex.nivel]++; });
+  return c;
 }
 // Descobre o índice da opção correta a partir de "resposta_correta" (texto da opção ou letra A/B/C/D)
 function acharIndiceCorreto(opcoes, resp){
@@ -2042,12 +2146,22 @@ function exEditorCard(ex,i){
       (ex.tipo==='mc' && opcoes.length<6 ? `<button class="btn gray small" style="width:100%;margin-top:4px" onclick="App.addOpt(${i})">+ opção</button>`:'');
   }
 
+  const nivelSel = `<select onchange="App.setExNivel(${i},this.value)">
+    <option value="" ${!ex.nivel?'selected':''}>Sem nível</option>
+    <option value="facil" ${ex.nivel==='facil'?'selected':''}>Fácil (+10 XP)</option>
+    <option value="intermediario" ${ex.nivel==='intermediario'?'selected':''}>Intermediário (+20 XP)</option>
+    <option value="dificil" ${ex.nivel==='dificil'?'selected':''}>Difícil (+30 XP)</option>
+  </select>`;
+
   return `<div class="ex-edit-card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <b>Exercício ${i+1}</b>
       <button class="icon-btn" onclick="App.removeExercise(${i})" title="Remover exercício">🗑️</button>
     </div>
-    <label>Tipo</label>${tipoSel}
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label>Tipo</label>${tipoSel}</div>
+      <div style="flex:1"><label>Dificuldade</label>${nivelSel}</div>
+    </div>
     <label>Enunciado</label>
     <input value="${esc(ex.enunciado||'')}" placeholder="Escreva a pergunta" oninput="App.setExEnun(${i},this.value)">
     ${corpo}
@@ -2056,14 +2170,24 @@ function exEditorCard(ex,i){
 
 // ---- mutações do exercício em edição (sincroniza inputs antes de re-render) ----
 function syncTextInputs(){
+  if(!Teacher.editingLesson) return;
   // captura título e texto antes de re-renderizar (eles não têm oninput para evitar re-render no meio da digitação)
   const t=document.getElementById("lTitulo"), x=document.getElementById("lTexto");
   if(t) Teacher.editingLesson.titulo=t.value;
   if(x) Teacher.editingLesson.texto=x.value;
+  // escopo da lição (turma/ano/nível)
+  const nv=document.getElementById("lNivel"); if(nv) Teacher.editingLesson.nivel=nv.value;
+  const an=document.getElementById("lAno");   if(an) Teacher.editingLesson.ano=an.value;
+  const tu=document.getElementById("lTurma"); if(tu) Teacher.editingLesson.turma=tu.value;
+}
+function onLessonNivel(v){
+  syncTextInputs();
+  Teacher.editingLesson.nivel=v; Teacher.editingLesson.ano=""; // reseta o ano ao trocar de nível
+  render();
 }
 function addExercise(){
   syncTextInputs();
-  Teacher.editingLesson.exercicios.push({ id:uid(), tipo:"mc", enunciado:"", opcoes:["",""], correta:0 });
+  Teacher.editingLesson.exercicios.push({ id:uid(), tipo:"mc", nivel:"", enunciado:"", opcoes:["",""], correta:0 });
   render();
 }
 function removeExercise(i){ syncTextInputs(); Teacher.editingLesson.exercicios.splice(i,1); render(); }
@@ -2078,6 +2202,7 @@ function setExType(i,t){
 }
 function setExEnun(i,v){ Teacher.editingLesson.exercicios[i].enunciado=v; }
 function setExResp(i,v){ Teacher.editingLesson.exercicios[i].resposta=v; }
+function setExNivel(i,v){ syncTextInputs(); Teacher.editingLesson.exercicios[i].nivel=v; render(); }
 function setOpt(i,j,v){ Teacher.editingLesson.exercicios[i].opcoes[j]=v; }
 function setCorrect(i,j){ syncTextInputs(); Teacher.editingLesson.exercicios[i].correta=j; render(); }
 function addOpt(i){ syncTextInputs(); Teacher.editingLesson.exercicios[i].opcoes.push(""); render(); }
@@ -2109,7 +2234,10 @@ async function saveLesson(){
     disciplina: disc,
     titulo: L.titulo,
     conteudo: L.texto,
-    exercicios: L.exercicios
+    exercicios: L.exercicios,
+    turma: L.turma||"",
+    ano: L.ano||"",
+    nivel: L.nivel||""
   };
   toast("Salvando...");
   try{
@@ -2129,7 +2257,7 @@ async function saveLesson(){
     // atualiza o estado local (remove de onde estava e re-adiciona na disciplina atual)
     removeLicaoLocal(L.id);
     if(!DATA[disc]) DATA[disc]=[];
-    DATA[disc].push({ id:L.id, titulo:L.titulo, texto:L.texto, exercicios:L.exercicios, resumoIA:"", explicacoes:{} });
+    DATA[disc].push({ id:L.id, titulo:L.titulo, texto:L.texto, exercicios:L.exercicios, resumoIA:"", explicacoes:{}, turma:L.turma||"", ano:L.ano||"", nivel:L.nivel||"" });
 
     Teacher.editingLesson=null; Teacher.tab="licoes";
     toast("Lição salva com sucesso! ✅");
@@ -2157,9 +2285,9 @@ window.App = {
   irCadastroProf, submitLoginProf, toggleDiscCad, submitCadastroProf,
   submitAdminSenha, salvarChaveOpenAI,
   // professor
-  teacherTab, teacherSelectSubj,
+  teacherTab, teacherSelectSubj, onLessonNivel,
   newLesson, editLesson, deleteLesson, addExercise, removeExercise, setExType,
-  setExEnun, setExResp, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
+  setExEnun, setExResp, setExNivel, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
   // IA
   gerarExerciciosIA, toggleIaConfig, setModoIA,
   // sistema
