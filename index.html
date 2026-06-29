@@ -411,29 +411,38 @@ function initFirebase(){
 }
 
 // ----- Configuração da IA: OpenAI GPT-4o-mini -----
-// A chave é compartilhada via Firestore: coleção "config", documento "openai",
-// campo "apiKey", cadastrada pelo professor no painel de Admin. Carregada uma única
-// vez no boot (carregarChaveIA) e mantida em memória na variável global IA.apiKey.
+// Dois modos (config no painel Admin, salvos no Firestore config/openai):
+//  - PROXY (recomendado): IA.proxyUrl aponta para um proxy (ex.: Cloudflare Worker)
+//    que guarda a chave no servidor. O app NÃO envia chave (mais seguro) e o proxy
+//    devolve CORS correto inclusive em erros.
+//  - DIRETO: IA.apiKey é a chave da OpenAI usada direto do navegador (chave exposta;
+//    e respostas de erro da OpenAI vêm sem CORS).
 const IA_MODELO = "gpt-4o-mini";
 const IA_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-let IA = { apiKey:"", modo:"substituir" }; // apiKey em memória; modo: substituir | acumular
+let IA = { apiKey:"", proxyUrl:"", modo:"substituir" }; // em memória; modo: substituir | acumular
+function iaConfigurada(){ return !!((IA.proxyUrl && IA.proxyUrl.trim()) || (IA.apiKey && IA.apiKey.trim())); }
 function loadIA(){
   // modo de geração é uma preferência local (não precisa ir à nuvem)
   try{ const m=localStorage.getItem(IA_MODO_KEY); if(m==="substituir"||m==="acumular") IA.modo=m; }catch(e){}
 }
 function saveIaModo(){ try{ localStorage.setItem(IA_MODO_KEY, IA.modo); }catch(e){} }
 
-// Lê a chave da OpenAI do Firestore (config/openai.apiKey) e guarda em IA.apiKey.
-// Best-effort: sem rede/permissão, segue sem chave (cai no fallback nas telas).
+// Lê a config da IA do Firestore (config/openai: apiKey + proxyUrl) para a memória.
+// Best-effort: sem rede/permissão, segue sem config (cai no fallback nas telas).
 async function carregarChaveIA(){
   if(!db) return;
   try{
     const doc = await db.collection("config").doc("openai").get();
-    if(doc.exists){ const d=doc.data()||{}; if(d.apiKey){ IA.apiKey = String(d.apiKey).trim(); return; } }
+    if(doc.exists){
+      const d=doc.data()||{};
+      if(d.apiKey) IA.apiKey = String(d.apiKey).trim();
+      if(d.proxyUrl) IA.proxyUrl = String(d.proxyUrl).trim();
+      if(d.apiKey || d.proxyUrl) return;
+    }
     // compatibilidade com a versão anterior (config/app.openaiApiKey)
     const legado = await db.collection("config").doc("app").get();
     if(legado.exists){ const d=legado.data()||{}; if(d.openaiApiKey) IA.apiKey = String(d.openaiApiKey).trim(); }
-  }catch(e){ /* sem permissão/rede: segue sem chave compartilhada */ }
+  }catch(e){ /* sem permissão/rede: segue sem config compartilhada */ }
 }
 
 // ----- Hash simples de senha (SHA-256, client-only) -----
@@ -1328,27 +1337,33 @@ function renderAdmin(){
     setTimeout(()=>{ const e=document.getElementById("admSenha"); if(e){ e.focus(); e.onkeydown=ev=>{ if(ev.key==="Enter") submitAdminSenha(); }; } },80);
     return;
   }
-  const temChave = (IA.apiKey||"").trim().length>0;
+  const usaProxy = (IA.proxyUrl||"").trim().length>0;
+  const status = usaProxy ? "✅ via proxy (recomendado)" : ((IA.apiKey||"").trim() ? "✅ chave direta" : "❌ não configurada");
   app.innerHTML = authShell(`
     <h2 style="margin:10px 0 16px">⚙️ Configuração da IA</h2>
     ${authErroHtml()}
     <div class="ia-panel">
-      <p style="font-size:13px;color:#555;margin-bottom:8px">Modelo: <b>${IA_MODELO}</b> (OpenAI). A chave é salva no Firestore (<code>config/openai</code>, campo <code>apiKey</code>) e usada por todos os dispositivos.</p>
-      <p style="font-size:12px;color:#c0392b;margin-bottom:10px">⚠️ A chave fica legível por quem acessar o Firestore. Não use uma chave sem limite de gastos.</p>
-      <label>OpenAI API Key</label>
+      <p style="font-size:13px;color:#555;margin-bottom:8px">Modelo: <b>${IA_MODELO}</b> (OpenAI). Status: <b>${status}</b>.</p>
+
+      <label>URL do proxy (recomendado)</label>
+      <input id="admProxy" value="${esc(IA.proxyUrl||'')}" placeholder="https://...workers.dev" autocomplete="off">
+      <p style="font-size:12px;color:#1a73e8;margin:-4px 0 12px">🛡️ Com proxy, a chave fica no servidor (não no navegador) e a geração funciona sempre. Veja <code>proxy/README.md</code> no projeto para publicar o Cloudflare Worker (grátis).</p>
+
+      <label>OpenAI API Key (só se NÃO usar proxy)</label>
       ${inputSenha('admKey','sk-...', IA.apiKey)}
-      <p style="font-size:12px;color:#1a73e8;margin:-4px 0 10px">🔑 Obtenha em <b>platform.openai.com</b> → API Keys. Status atual: ${temChave?'✅ configurada':'❌ não configurada'}.</p>
-      ${authBusyBtn(`<button class="btn" onclick="App.salvarChaveOpenAI()">💾 Salvar chave no Firestore</button>`)}
+      <p style="font-size:12px;color:#c0392b;margin:-4px 0 10px">⚠️ Modo direto: a chave fica legível no Firestore e exposta no navegador. Prefira o proxy. Obtenha a chave em <b>platform.openai.com</b> (precisa de créditos/billing).</p>
+
+      ${authBusyBtn(`<button class="btn" onclick="App.salvarChaveOpenAI()">💾 Salvar configuração</button>`)}
       ${State.authBusy?'':`<button class="btn gray small" style="width:100%;margin-top:8px" onclick="App.testarChaveIA()">🔌 Testar conexão com a IA</button>`}
     </div>
     <button class="btn gray" style="margin-top:12px" onclick="App.irTela('landing')">Voltar</button>
   `, "landing");
 }
-// Testa a chave/conexão fazendo uma chamada mínima à OpenAI.
+// Testa a chave/conexão fazendo uma chamada mínima (usa proxy se houver).
 async function testarChaveIA(){
-  const k = val('admKey').trim();
-  if(k) IA.apiKey = k; // usa o que está no campo (em memória), mesmo sem salvar
-  if(!IA.apiKey.trim()){ State.authErro="Cole a chave antes de testar."; render(); return; }
+  const p = val('admProxy').trim(); if(p!==null) IA.proxyUrl = p; // usa o que está nos campos (em memória)
+  const k = val('admKey').trim(); if(k) IA.apiKey = k;
+  if(!iaConfigurada()){ State.authErro="Informe a URL do proxy ou a chave antes de testar."; render(); return; }
   State.authBusy=true; State.authErro=""; render();
   try{
     await chamarIA("Responda apenas: ok", 15000);
@@ -1362,11 +1377,12 @@ function submitAdminSenha(){
 }
 async function salvarChaveOpenAI(){
   const k=val('admKey').trim();
+  const proxy=val('admProxy').trim();
   State.authBusy=true; State.authErro=""; render();
   try{
-    await db.collection("config").doc("openai").set({ apiKey:k, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
-    IA.apiKey=k; State.authBusy=false; toast("Chave salva no Firestore! ✅"); render();
-  }catch(e){ State.authBusy=false; State.authErro="Erro ao salvar a chave (verifique as regras do Firestore)."; render(); }
+    await db.collection("config").doc("openai").set({ apiKey:k, proxyUrl:proxy, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
+    IA.apiKey=k; IA.proxyUrl=proxy; State.authBusy=false; toast("Configuração salva! ✅"); render();
+  }catch(e){ State.authBusy=false; State.authErro="Erro ao salvar (verifique as regras do Firestore)."; render(); }
 }
 
 function irTela(t){ State.authErro=""; State.authBusy=false; if(t==="admin") State.adminAuth=false; State.tela=t; render(); }
@@ -2318,7 +2334,7 @@ function renderPreview(){
 // ---- PAINEL DE GERAÇÃO POR IA (OpenAI / gpt-4o-mini; chave compartilhada via Admin) ----
 function iaPanel(L){
   const temTexto = (L.texto||"").trim().length>0;
-  const temChave = (IA.apiKey||"").trim().length>0;
+  const temChave = iaConfigurada();
 
   // estado de carregamento
   if(Teacher.gerando || Teacher.regenerando){
@@ -2398,21 +2414,21 @@ Conteúdo da lição: ${conteudo}`;
   }
 }
 
-// Chamada genérica à API da OpenAI. Retorna o texto; lança Error em falha.
-// timeoutMs (opcional): aborta a requisição e lança Error("timeout") se estourar.
+// Chamada genérica à IA. Usa o proxy se configurado (sem chave no cliente);
+// senão chama a OpenAI direto com a chave. timeoutMs aborta e lança Error("timeout").
 async function chamarIA(prompt, timeoutMs){
-  if(!IA.apiKey.trim()) throw new Error("Sem chave de API configurada.");
+  const usaProxy = !!(IA.proxyUrl && IA.proxyUrl.trim());
+  if(!usaProxy && !IA.apiKey.trim()) throw new Error("Sem chave de API configurada.");
   const ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
   let timer=null, expirou=false;
   if(ctrl && timeoutMs){ timer=setTimeout(()=>{ expirou=true; try{ ctrl.abort(); }catch(_){} }, timeoutMs); }
+  const headers = { "Content-Type":"application/json" };
+  if(!usaProxy) headers["Authorization"] = "Bearer " + IA.apiKey.trim(); // proxy injeta a chave
   let resp;
   try{
-    resp = await fetch(IA_ENDPOINT, {
+    resp = await fetch(usaProxy ? IA.proxyUrl.trim() : IA_ENDPOINT, {
       method:"POST",
-      headers:{
-        "Content-Type":"application/json",
-        "Authorization":"Bearer " + IA.apiKey.trim()
-      },
+      headers: headers,
       body: JSON.stringify({
         model: IA_MODELO,
         messages:[{ role:"user", content: prompt }],

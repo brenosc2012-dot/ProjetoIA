@@ -172,11 +172,14 @@ Regras necessárias em `firestore.rules` (ponto de partida; ver arquivo no repo)
   - Modelo: `gpt-4o-mini`
   - Auth: header `Authorization: Bearer <chave>`
   - Resposta extraída de `data.choices[0].message.content`.
-  - A chave (`IA.apiKey`) é **compartilhada via Firestore** (`config/openai`, campo
-    `apiKey`), cadastrada no **painel de Admin** (`ADMIN_PASSWORD`), e carregada **uma
-    única vez no boot** por `carregarChaveIA()` para a variável em memória `IA.apiKey`.
-    Não há `config.js`/`.env` nem chave por dispositivo. (Há leitura de compatibilidade
-    do local antigo `config/app.openaiApiKey`.)
+  - Config no Firestore `config/openai` (`apiKey` e `proxyUrl`), cadastrada no **painel
+    de Admin** (`ADMIN_PASSWORD`), carregada no boot por `carregarChaveIA()` para `IA`.
+  - **Dois modos** (`chamarIA`): se `IA.proxyUrl` está setado → chama o **proxy** (sem
+    chave no cliente; o proxy injeta a chave e devolve CORS); senão chama a OpenAI
+    **direto** com `IA.apiKey`. Proxy recomendado: ver `proxy/` (Cloudflare Worker).
+  - ⚠️ A OpenAI **não envia CORS em respostas de erro** (401/429) → chamada direta com
+    chave inválida/sem créditos aparece como "Failed to fetch" (parece falta de rede).
+    `mensagemErroIA()` explica isso; o proxy elimina o problema.
   - **Geração agora cria 15 exercícios** em 3 níveis (5 fácil / 5 intermediário /
     5 difícil); o parser captura o campo `nivel`. XP por acerto: 10/20/30.
 - Helper compartilhado: `chamarIA(prompt)` faz o `fetch` e devolve o texto (lança
