@@ -860,6 +860,19 @@ const Sound = {
 // Módulo de LEITURA EM VOZ ALTA (TTS) — Web Speech API, sem arquivos, offline.
 const Fala = {
   ok(){ return typeof window!=="undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance!=="undefined"; },
+  voz: null,
+  // escolhe a melhor voz em português (preferindo pt-BR e vozes "naturais")
+  escolherVoz(){
+    try{
+      const vs = window.speechSynthesis.getVoices() || [];
+      if(!vs.length) return null;
+      const br = vs.filter(v=>/pt[-_]BR/i.test(v.lang));
+      const pt = vs.filter(v=>/^pt/i.test(v.lang));
+      const cand = (br.length?br:pt);
+      // prioriza vozes mais naturais (Google/Microsoft/online) quando houver
+      return cand.find(v=>/google|natural|online|luciana|francisca|microsoft/i.test(v.name)) || cand[0] || null;
+    }catch(e){ return null; }
+  },
   ler(texto){
     if(!this.ok() || !texto) return;
     try{
@@ -868,13 +881,25 @@ const Fala = {
       const limpo = String(texto).replace(/[*#]/g, "").replace(/[ \t]{2,}/g, " ").trim();
       if(!limpo) return;
       const u = new SpeechSynthesisUtterance(limpo.slice(0,4000));
-      u.lang="pt-BR"; u.rate=0.95; u.pitch=1;
+      u.lang = "pt-BR";
+      if(!this.voz) this.voz = this.escolherVoz();
+      if(this.voz) u.voice = this.voz;
+      u.rate = 1.08;  // um pouco mais rápido (didático, sem soar arrastado)
+      u.pitch = 1.05; // tom levemente mais alegre, como um(a) professor(a)
+      u.volume = 1;
       window.speechSynthesis.speak(u);
     }catch(e){}
   },
   parar(){ if(this.ok()){ try{ window.speechSynthesis.cancel(); }catch(e){} } },
   falando(){ try{ return this.ok() && window.speechSynthesis.speaking; }catch(e){ return false; } }
 };
+// Aquece a lista de vozes (chega de forma assíncrona em alguns navegadores).
+if(Fala.ok()){
+  try{
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = function(){ Fala.voz = Fala.escolherVoz(); };
+  }catch(e){}
+}
 // Botão reutilizável de "ouvir" (só aparece se o navegador suporta TTS).
 function botaoFala(handler, rotulo){
   if(!Fala.ok()) return "";
