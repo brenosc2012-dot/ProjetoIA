@@ -1060,7 +1060,7 @@ function renderLoginAluno(){
     <button class="btn gray" style="margin-top:12px" onclick="App.irCadastroAluno()">Ainda não tenho conta — Cadastrar</button>
   `, "landing");
 }
-function irCadastroAluno(){ Form={ nivel:"fund1", ano:"1º ano" }; State.authErro=""; State.tela="cadastroAluno"; render(); }
+function irCadastroAluno(){ Form={ nivel:"fund1", ano:"" }; State.authErro=""; State.tela="cadastroAluno"; render(); }
 async function submitLoginAluno(){
   const nome=val('laNome').trim(), senha=val('laSenha');
   if(!nome||!senha){ State.authErro="Informe nome e senha."; render(); return; }
@@ -1095,7 +1095,10 @@ function renderCadastroAluno(){
     <label>Nível de ensino</label>
     <select id="caNivel" onchange="App.onNivelCadAluno(this.value)">${nivelOptions(Form.nivel)}</select>
     <label>Ano cursando</label>
-    <select id="caAno">${anoOptions(Form.nivel, Form.ano)}</select>
+    <select id="caAno">
+      <option value="" ${!Form.ano?'selected':''} disabled>Selecione o ano</option>
+      ${anoOptions(Form.nivel, Form.ano)}
+    </select>
     <label>Turma</label>
     <input id="caTurma" value="${esc(Form.turma||'')}" placeholder="Ex: A" autocomplete="off">
     <label>Senha de acesso</label>
@@ -1106,13 +1109,16 @@ function renderCadastroAluno(){
 }
 function onNivelCadAluno(v){
   Form.nome=val('caNome'); Form.idade=val('caIdade'); Form.turma=val('caTurma'); Form.senha=val('caSenha');
-  Form.nivel=v; Form.ano=nivelById(v).anos[0]; render();
+  Form.nivel=v; Form.ano=""; render(); // troca de nível obriga a escolher o ano de novo
 }
 async function submitCadastroAluno(){
   const nome=val('caNome').trim(), idade=parseInt(val('caIdade'),10),
         turma=val('caTurma').trim().toUpperCase(), senha=val('caSenha'),
         nivel=val('caNivel')||Form.nivel, ano=val('caAno')||Form.ano;
+  // preserva o que foi digitado caso a validação re-renderize a tela
+  Object.assign(Form, { nome, idade:val('caIdade'), turma:val('caTurma'), senha, nivel, ano });
   if(!nome||!senha||!turma||!idade || isNaN(idade)){ State.authErro="Preencha todos os campos."; render(); return; }
+  if(!ano){ State.authErro="Selecione o ano que você está cursando."; render(); return; }
   State.authBusy=true; State.authErro=""; render();
   try{
     const senhaHash = await hashSenha(senha);
@@ -1317,7 +1323,7 @@ function renderLessons(){
   const licoes = licoesDoAluno(s.id);
   let list;
   if(licoes.length===0){
-    list = `<div class="empty"><div class="em">📭</div><p>Nenhuma lição para a sua turma ainda.<br>Peça ao professor para adicionar!</p></div>`;
+    list = `<div class="empty"><div class="em">📭</div><p>Nenhuma lição para <b>Turma ${esc(PROFILE.turma||'?')} • ${esc(PROFILE.ano||'?')}</b> ainda.<br>Confira seus dados escolares no perfil ou peça ao professor para adicionar!</p></div>`;
   } else {
     list = licoes.map((l,i)=>{
       const feita = d.licoesConcluidas.indexOf(l.id)>=0;
@@ -1921,6 +1927,16 @@ function renderProfile(){
       <div class="medal-grid">${medalhasGrid}</div>
       ${trofeusHtml}
 
+      <div class="sec-title">📚 Meus dados escolares</div>
+      <p style="font-size:12px;color:#999;margin:-2px 0 8px">As lições que você vê dependem destes dados. Mantenha-os corretos!</p>
+      <label>Nível de ensino</label>
+      <select id="pfNivel" onchange="App.onPerfilNivel(this.value)">${nivelOptions(PROFILE.nivel)}</select>
+      <label>Ano cursando</label>
+      <select id="pfAno"><option value="" ${!PROFILE.ano?'selected':''} disabled>Selecione o ano</option>${anoOptions(PROFILE.nivel, PROFILE.ano)}</select>
+      <label>Turma</label>
+      <input id="pfTurma" value="${esc(PROFILE.turma||'')}" placeholder="Ex: A">
+      <button class="btn blue small" style="width:100%" onclick="App.salvarDadosEscolares()">💾 Salvar dados escolares</button>
+
       <div class="sec-title">Progresso por disciplina</div>
       ${rows}
 
@@ -1931,6 +1947,15 @@ function renderProfile(){
   </div>`;
 }
 function toggleSound(){ PROFILE.som=!PROFILE.som; saveProfile(); if(PROFILE.som){ Sound.init(); Sound.correct(); } render(); }
+// Permite corrigir nível/ano/turma de uma conta já criada (resolve lições "sumidas").
+function onPerfilNivel(v){ const t=val('pfTurma'); if(t!=null) ALUNO.turma=t.trim().toUpperCase(); ALUNO.nivel=v; ALUNO.ano=""; render(); }
+function salvarDadosEscolares(){
+  const nivel=val('pfNivel'), ano=val('pfAno'), turma=val('pfTurma').trim().toUpperCase();
+  if(!ano){ toast("Selecione o ano."); return; }
+  if(!turma){ toast("Informe a turma."); return; }
+  ALUNO.nivel=nivel; ALUNO.ano=ano; ALUNO.turma=turma;
+  saveProfile(); toast("Dados escolares atualizados! ✅"); render();
+}
 function resetProgress(){
   if(confirm("Tem certeza que deseja zerar TODO o seu progresso (XP, níveis, ofensiva)? Sua conta será mantida.")){
     // zera apenas a gamificação, preservando a identidade (nome, idade, ano, turma, senha)
@@ -2694,6 +2719,7 @@ function teacherPremiosTab(){
 window.App = {
   goHome, openSubject, openLesson, startExercises, selectOpt, onFillInput,
   checkAnswer, nextExercise, continuarAposExplicacao, confirmQuit, openProfile, resetProgress, toggleSound,
+  onPerfilNivel, salvarDadosEscolares,
   // autenticação
   irTela, logout,
   irCadastroAluno, submitLoginAluno, onNivelCadAluno, submitCadastroAluno,
