@@ -760,6 +760,7 @@ function normalizarAluno(a){
   if(!("ultimoDia" in a)) a.ultimoDia=null;
   if(!Array.isArray(a.medalhas)) a.medalhas=[];
   if(!Array.isArray(a.premiacoes)) a.premiacoes=[];
+  if(!a.premiacoesInfo || typeof a.premiacoesInfo!=="object") a.premiacoesInfo={};
   if(typeof a.som!=="boolean") a.som=true;
   if(!a.disciplinas || typeof a.disciplinas!=="object") a.disciplinas={};
   SUBJECTS.forEach(s=>{ if(!a.disciplinas[s.id]) a.disciplinas[s.id]={xp:0,nivel:1,licoesConcluidas:[]}; });
@@ -899,6 +900,7 @@ function concederRecompensa(subjId, lessonId, xpAcertos){
 const ACHIEVEMENTS = [
   { id:"first",     icon:"🌟", titulo:"Primeiros Passos", desc:"Conclua sua primeira lição",            check:(p,s)=> s.totalConcl>=1 },
   { id:"l5",        icon:"📚", titulo:"Estudioso",        desc:"Conclua 5 lições no total",             check:(p,s)=> s.totalConcl>=5 },
+  { id:"l10",       icon:"📖", titulo:"Dedicado",         desc:"Conclua 10 lições no total",            check:(p,s)=> s.totalConcl>=10 },
   { id:"l15",       icon:"🎓", titulo:"Sabe-Tudo",        desc:"Conclua 15 lições no total",            check:(p,s)=> s.totalConcl>=15 },
   { id:"perfeito",  icon:"🎯", titulo:"Nota Mil",         desc:"Acerte todos os exercícios de uma lição", check:(p,s,c)=> !!c.perfeito },
   { id:"xp100",     icon:"💯", titulo:"Cem de XP",        desc:"Alcance 100 XP no total",               check:(p)=> p.xpTotal>=100 },
@@ -931,6 +933,55 @@ function verificarMedalhas(ctx){
   });
   if(novas.length) saveProfile();
   return novas;
+}
+
+// --- PREMIAÇÕES PERSONALIZADAS (cadastradas pelo professor) ---
+let PREMIACOES = []; // premiações disponíveis carregadas do Firestore para o aluno
+async function carregarPremiacoes(){
+  PREMIACOES = [];
+  if(!db || !ALUNO) return;
+  try{
+    const snap = await db.collection("premiacoes").get();
+    snap.forEach(d=> PREMIACOES.push(Object.assign({ id:d.id }, d.data())));
+  }catch(e){ PREMIACOES=[]; }
+}
+function agoraSeg(){ return Math.floor(Date.now()/1000); }
+function premiacaoAplicavel(pr){
+  if(pr.turma && pr.turma!==ALUNO.turma) return false;
+  if(pr.expiracaoEm && pr.expiracaoEm.seconds && pr.expiracaoEm.seconds < agoraSeg()) return false;
+  return true;
+}
+function premiacaoAtingida(pr, ctx){
+  const v = Number(pr.valorMinimo)||0;
+  if(pr.criterio==="pontuacao")  return (ALUNO.xpTotal||0) >= v;
+  if(pr.criterio==="atividades") return (ALUNO.licoesConcluidas||[]).length >= v;
+  if(pr.criterio==="acertos")    return ctx && ctx.pctAcertos!=null && ctx.pctAcertos >= v;
+  return false;
+}
+// Avalia as premiações e concede as recém-atingidas (grava em premiacoes_alunos).
+async function avaliarPremiacoes(ctx){
+  if(!db || !ALUNO || !PREMIACOES.length) return [];
+  ALUNO.premiacoes = ALUNO.premiacoes||[];
+  ALUNO.premiacoesInfo = ALUNO.premiacoesInfo||{};
+  const novas=[];
+  for(const pr of PREMIACOES){
+    if(ALUNO.premiacoes.indexOf(pr.id)>=0) continue;
+    if(!premiacaoAplicavel(pr)) continue;
+    if(!premiacaoAtingida(pr, ctx)) continue;
+    ALUNO.premiacoes.push(pr.id);
+    ALUNO.premiacoesInfo[pr.id] = { nome:pr.nome||"Prêmio", icone:pr.icone||"🏆", descricao:pr.descricao||"" };
+    novas.push(pr);
+    try{ await db.collection("premiacoes_alunos").doc(ALUNO.id+"_"+pr.id).set({
+      alunoId:ALUNO.id, premiacaoId:pr.id, conquistadoEm:firebase.firestore.FieldValue.serverTimestamp() }); }catch(e){}
+  }
+  if(novas.length) saveProfile();
+  return novas;
+}
+// Carrega e avalia premiações ao entrar (premia por XP/atividades acumulados).
+function inicializarAluno(){
+  carregarPremiacoes().then(()=> avaliarPremiacoes({}).then(novas=>{
+    if(novas && novas.length){ novas.forEach(p=>toast(`🏆 ${p.nome}!`)); if(State.tela==="home"||State.tela==="profile") render(); }
+  }));
 }
 
 /* ============================================================
@@ -1024,7 +1075,7 @@ async function submitLoginAluno(){
     const doc = Object.assign({}, achou.data, { id:achou.id }); delete doc.criadoEm;
     definirAlunoLogado(doc);
     SESSAO={ tipo:"aluno", id:achou.id }; salvarSessao();
-    State.authBusy=false; State.tela="home"; render();
+    State.authBusy=false; State.tela="home"; render(); inicializarAluno();
   }catch(e){
     State.authBusy=false;
     State.authErro = e.message==="nao_encontrado" ? "Aluno não encontrado." : (e.message==="senha" ? "Senha incorreta." : "Erro ao entrar. Verifique a conexão.");
@@ -1070,7 +1121,7 @@ async function submitCadastroAluno(){
     base.id = ref.id;
     definirAlunoLogado(base);
     SESSAO={ tipo:"aluno", id:ref.id }; salvarSessao();
-    State.authBusy=false; State.tela="home"; render();
+    State.authBusy=false; State.tela="home"; render(); inicializarAluno();
   }catch(e){ State.authBusy=false; State.authErro="Não foi possível cadastrar. Verifique a conexão."; render(); }
 }
 
@@ -1699,7 +1750,12 @@ function finishLesson(){
   const r = concederRecompensa(State.subj, State.lesson, Sess.xpGanho);
   const novasMedalhas = verificarMedalhas({ perfeito:perfeito });
   salvarProgresso(State.subj, State.lesson, Sess); // grava na coleção "progresso" (painel do professor)
-  State.tela="done"; State._reward=r; State._medalhas=novasMedalhas; render();
+  const pct = Sess.total ? Math.round(Sess.acertos/Sess.total*100) : 0;
+  State.tela="done"; State._reward=r; State._medalhas=novasMedalhas; State._premios=[]; render();
+  // premiações personalizadas (async): atualiza a tela e avisa ao conquistar
+  avaliarPremiacoes({ pctAcertos:pct }).then(novas=>{
+    if(novas && novas.length){ State._premios=novas; if(State.tela==="done") renderDone(); novas.forEach(p=>{ Sound.unlock(); toast(`🏆 ${p.nome}!`); }); }
+  });
 }
 
 // Grava o desempenho do aluno na lição (doc {alunoId}_{licaoId}) para o painel do professor.
@@ -1726,6 +1782,14 @@ function renderDone(){
         <div style="text-align:left"><b>${esc(m.titulo)}</b><div style="font-size:12px;color:#777">${esc(m.desc)}</div></div>
       </div>`).join("")}
     </div>` : '';
+  const premios = State._premios||[];
+  const premiosHtml = premios.length ? `<div style="width:100%;margin-top:6px">
+      <div class="sec-title" style="text-align:center">🏆 Premiação conquistada!</div>
+      ${premios.map((p,i)=>`<div class="medal-pop pop" style="animation-delay:${.15*i}s;background:#f3e9ff;border-color:#d9bfff">
+        <span style="font-size:30px">${esc(p.icone||'🏆')}</span>
+        <div style="text-align:left"><b>${esc(p.nome||'Prêmio')}</b><div style="font-size:12px;color:#777">${esc(p.descricao||'')}</div></div>
+      </div>`).join("")}
+    </div>` : '';
   app.innerHTML = `<div class="screen active">
     <div class="celebrate" id="celebrate">
       ${mascot('bounce')}
@@ -1737,6 +1801,7 @@ function renderDone(){
       </div>
       ${r.subiuNivel? `<div class="pill-tag pop" style="background:var(--yellow);font-size:14px;padding:8px 16px">🎊 Subiu para o Nível ${r.nivel}!</div>`:''}
       ${medalhasHtml}
+      ${premiosHtml}
       <div style="width:100%;margin-top:28px">
         <button class="btn" onclick="App.openSubject('${s.id}')">Continuar</button>
         <button class="btn gray" style="margin-top:10px" onclick="App.goHome()">🏠 Início</button>
@@ -1793,6 +1858,16 @@ function renderProfile(){
       <div class="mt">${esc(a.titulo)}</div>
     </div>`;
   }).join("");
+  // Premiações personalizadas conquistadas (cadastradas pelo professor)
+  const info = PROFILE.premiacoesInfo||{};
+  const idsPrem = PROFILE.premiacoes||[];
+  const trofeusHtml = idsPrem.length ? `
+      <div class="sec-title">🏆 Meus troféus (${idsPrem.length})</div>
+      <div class="medal-grid">${idsPrem.map(id=>{
+        const p=info[id]||{ nome:"Prêmio", icone:"🏆", descricao:"" };
+        return `<div class="medal" title="${esc(p.descricao||'')}">
+          <div class="mi">${esc(p.icone||'🏆')}</div><div class="mt">${esc(p.nome||'Prêmio')}</div></div>`;
+      }).join("")}</div>` : '';
   app.innerHTML = `<div class="screen active">
     <div class="topbar"><button class="back-btn" onclick="App.goHome()">←</button><h2>👤 Meu Perfil</h2></div>
     <div class="content">
@@ -1808,6 +1883,7 @@ function renderProfile(){
 
       <div class="sec-title">🏅 Minhas conquistas (${PROFILE.medalhas.length}/${ACHIEVEMENTS.length})</div>
       <div class="medal-grid">${medalhasGrid}</div>
+      ${trofeusHtml}
 
       <div class="sec-title">Progresso por disciplina</div>
       ${rows}
@@ -1833,12 +1909,15 @@ function resetProgress(){
    ============================================================ */
 const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, iaErro:"", iaConfigAberta:false,
   // painel de rendimento (Fase C)
-  prog:{ carregada:false, carregando:false, erro:"", alunos:[], progresso:[], fTurma:"", fDisc:"", fPeriodo:"todos" } };
+  prog:{ carregada:false, carregando:false, erro:"", alunos:[], progresso:[], fTurma:"", fDisc:"", fPeriodo:"todos" },
+  // premiações personalizadas (Fase D)
+  prem:{ carregada:false, carregando:false, erro:"", lista:[], salvando:false, form:null } };
 
 function renderTeacher(){
   let inner;
   if(Teacher.tab==="licoes") inner=teacherLessonsTab();
   else if(Teacher.tab==="novo") inner=teacherEditorTab();
+  else if(Teacher.tab==="premios") inner=teacherPremiosTab();
   else inner=teacherProgressTab();
 
   app.innerHTML = `<div class="screen active">
@@ -1849,7 +1928,8 @@ function renderTeacher(){
     <div class="teacher-tabs">
       <button class="teacher-tab ${Teacher.tab==='licoes'?'active':''}" onclick="App.teacherTab('licoes')">📋 Lições</button>
       <button class="teacher-tab ${Teacher.tab==='novo'?'active':''}" onclick="App.teacherTab('novo')">${Teacher.editingLesson?'✏️ Editar':'➕ Nova'}</button>
-      <button class="teacher-tab ${Teacher.tab==='progresso'?'active':''}" onclick="App.teacherTab('progresso')">📊 Progresso</button>
+      <button class="teacher-tab ${Teacher.tab==='progresso'?'active':''}" onclick="App.teacherTab('progresso')">📊 Rendimento</button>
+      <button class="teacher-tab ${Teacher.tab==='premios'?'active':''}" onclick="App.teacherTab('premios')">🏆 Prêmios</button>
     </div>
     <div class="content" style="background:#faf7ff">${inner}</div>
   </div>`;
@@ -1858,6 +1938,7 @@ function teacherTab(t){
   if(t!=="novo") Teacher.editingLesson=null;
   Teacher.tab=t;
   if(t==="progresso" && !Teacher.prog.carregada && !Teacher.prog.carregando){ carregarRendimento(); return; }
+  if(t==="premios" && !Teacher.prem.carregada && !Teacher.prem.carregando){ carregarPremiacoesProf(); return; }
   render();
 }
 
@@ -2439,6 +2520,96 @@ function teacherProgressTab(){
   return filtros + resumo + grafico + ranking + lista;
 }
 
+// --- ABA: premiações personalizadas (CRUD) ---
+function premForm(){
+  if(!Teacher.prem.form) Teacher.prem.form={ nome:"", descricao:"", icone:"🏆", criterio:"atividades", valorMinimo:"", turma:"", expiracao:"" };
+  return Teacher.prem.form;
+}
+// Carrega as premiações das turmas do professor.
+async function carregarPremiacoesProf(){
+  Teacher.prem.carregando=true; Teacher.prem.erro=""; render();
+  try{
+    const turmas=(PROFESSOR && Array.isArray(PROFESSOR.turmas))?PROFESSOR.turmas:[];
+    const snap=await db.collection("premiacoes").get();
+    const lista=[];
+    snap.forEach(d=>{ const p=d.data(); if(!p.turma || turmas.indexOf(p.turma)>=0) lista.push(Object.assign({ id:d.id }, p)); });
+    Teacher.prem.lista=lista; Teacher.prem.carregada=true; Teacher.prem.carregando=false; render();
+  }catch(e){ Teacher.prem.carregando=false; Teacher.prem.carregada=true; Teacher.prem.erro="Não foi possível carregar as premiações."; render(); }
+}
+function setPremCriterio(v){
+  const f=premForm();
+  f.nome=val('pmNome'); f.descricao=val('pmDesc'); f.icone=val('pmIcone');
+  f.valorMinimo=val('pmValor'); f.turma=val('pmTurma'); f.expiracao=val('pmExpira');
+  f.criterio=v; render();
+}
+async function criarPremiacao(){
+  const nome=val('pmNome').trim(), descricao=val('pmDesc').trim(), icone=(val('pmIcone').trim()||"🏆");
+  const criterio=val('pmCriterio')||premForm().criterio, valorMinimo=Number(val('pmValor'))||0;
+  const turma=val('pmTurma'), expira=val('pmExpira');
+  if(!nome){ toast("Dê um nome à premiação."); return; }
+  if(!valorMinimo){ toast("Informe o valor do critério."); return; }
+  Teacher.prem.salvando=true; render();
+  try{
+    const payload={ nome, descricao, icone, criterio, valorMinimo, turma };
+    if(expira){ payload.expiracaoEm = firebase.firestore.Timestamp.fromDate(new Date(expira+"T23:59:59")); }
+    await db.collection("premiacoes").add(Object.assign({}, payload, { criadoEm: firebase.firestore.FieldValue.serverTimestamp() }));
+    Teacher.prem.form=null; Teacher.prem.salvando=false; Teacher.prem.carregada=false;
+    toast("Premiação criada! 🏆");
+    carregarPremiacoesProf();
+  }catch(e){ Teacher.prem.salvando=false; toast("Erro ao salvar premiação."); render(); }
+}
+async function excluirPremiacao(id){
+  if(!confirm("Excluir esta premiação?")) return;
+  try{
+    await db.collection("premiacoes").doc(id).delete();
+    Teacher.prem.lista=Teacher.prem.lista.filter(p=>p.id!==id);
+    toast("Premiação excluída."); render();
+  }catch(e){ toast("Erro ao excluir."); }
+}
+function teacherPremiosTab(){
+  const P=Teacher.prem;
+  if(P.carregando) return `<div class="ia-loading" style="color:#9b59b6;padding:30px 0"><span class="ia-spinner"></span> Carregando premiações...</div>`;
+  const f=premForm();
+  const turmas=(PROFESSOR && Array.isArray(PROFESSOR.turmas))?PROFESSOR.turmas:[];
+  const critLabel = f.criterio==="pontuacao" ? "XP mínimo" : (f.criterio==="acertos" ? "% mínimo de acertos numa lição" : "Nº de lições concluídas");
+  const btnSalvar = P.salvando
+    ? `<button class="btn" disabled><span class="ia-spinner" style="width:18px;height:18px;border-color:rgba(255,255,255,.4);border-top-color:#fff;vertical-align:middle"></span> Salvando...</button>`
+    : `<button class="btn" onclick="App.criarPremiacao()">💾 Criar premiação</button>`;
+
+  const form = `
+    <div class="sec-title">Nova premiação personalizada</div>
+    ${P.erro?`<div class="ia-erro">⚠️ ${esc(P.erro)}</div>`:''}
+    <label>Nome</label><input id="pmNome" value="${esc(f.nome||'')}" placeholder="Ex: Mestre da Matemática">
+    <label>Descrição</label><input id="pmDesc" value="${esc(f.descricao||'')}" placeholder="Ex: Concluiu 5 lições de Matemática">
+    <label>Ícone (emoji)</label><input id="pmIcone" value="${esc(f.icone||'🏆')}" placeholder="🏆" maxlength="4">
+    <label>Critério</label>
+    <select id="pmCriterio" onchange="App.setPremCriterio(this.value)">
+      <option value="atividades" ${f.criterio==='atividades'?'selected':''}>Nº de atividades concluídas</option>
+      <option value="pontuacao" ${f.criterio==='pontuacao'?'selected':''}>Pontuação mínima (XP)</option>
+      <option value="acertos" ${f.criterio==='acertos'?'selected':''}>% de acertos em uma lição</option>
+    </select>
+    <label>${critLabel}</label><input id="pmValor" type="number" min="1" value="${esc(f.valorMinimo||'')}" placeholder="Ex: 5">
+    <label>Turma alvo</label>
+    <select id="pmTurma">
+      <option value="">Todas as turmas</option>
+      ${turmas.map(t=>`<option value="${esc(t)}" ${f.turma===t?'selected':''}>Turma ${esc(t)}</option>`).join("")}
+    </select>
+    <label>Data de expiração (opcional)</label><input id="pmExpira" type="date" value="${esc(f.expiracao||'')}">
+    ${btnSalvar}`;
+
+  const lista = P.lista.length ? P.lista.map(p=>{
+    const exp = p.expiracaoEm && p.expiracaoEm.seconds ? new Date(p.expiracaoEm.seconds*1000).toLocaleDateString('pt-BR') : null;
+    const critTxt = p.criterio==="pontuacao" ? `${p.valorMinimo} XP` : (p.criterio==="acertos" ? `${p.valorMinimo}% de acertos` : `${p.valorMinimo} lições`);
+    return `<div class="t-lesson-row">
+      <span style="font-size:24px">${esc(p.icone||'🏆')}</span>
+      <div class="info"><div class="t">${esc(p.nome)}</div><div class="d">${esc(critTxt)} • ${p.turma?('Turma '+esc(p.turma)):'Todas as turmas'}${exp?(' • expira '+exp):''}</div></div>
+      <button class="icon-btn" onclick="App.excluirPremiacao('${p.id}')" title="Excluir">🗑️</button>
+    </div>`;
+  }).join("") : `<div class="empty"><div class="em">🏆</div><p>Nenhuma premiação personalizada ainda.</p></div>`;
+
+  return form + `<div class="sec-title">Premiações criadas</div>` + lista;
+}
+
 /* ============================================================
    F) INICIALIZAÇÃO + API pública (App.*)
    ============================================================ */
@@ -2456,6 +2627,8 @@ window.App = {
   setExEnun, setExResp, setExNivel, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
   // rendimento (Fase C)
   recarregarRendimento, setProgTurma, setProgDisc, setProgPeriodo,
+  // premiações (Fase D)
+  setPremCriterio, criarPremiacao, excluirPremiacao,
   // IA
   gerarExerciciosIA, toggleIaConfig, setModoIA,
   // sistema
@@ -2488,7 +2661,7 @@ async function restaurarSessao(){
   try{
     if(SESSAO.tipo==="aluno"){
       const doc = await db.collection("alunos").doc(SESSAO.id).get();
-      if(doc.exists){ const data=Object.assign({}, doc.data(), { id:doc.id }); delete data.criadoEm; definirAlunoLogado(data); State.tela="home"; return; }
+      if(doc.exists){ const data=Object.assign({}, doc.data(), { id:doc.id }); delete data.criadoEm; definirAlunoLogado(data); State.tela="home"; inicializarAluno(); return; }
     } else if(SESSAO.tipo==="professor"){
       const doc = await db.collection("professores").doc(SESSAO.id).get();
       if(doc.exists){ PROFESSOR=Object.assign({}, doc.data(), { id:doc.id }); State.tela="teacher"; Teacher.tab="licoes"; return; }
