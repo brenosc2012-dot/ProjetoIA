@@ -1537,7 +1537,7 @@ async function openLesson(lid){
 
   // pré-gera as explicações de erro em segundo plano (só em aparelho com a chave),
   // para que qualquer dispositivo já encontre a explicação pronta no Firestore
-  if(IA.apiKey.trim()) pregerarExplicacoes(l);
+  if(iaConfigurada()) pregerarExplicacoes(l);
 
   // 1) cache em memória desta sessão
   if(resumoCache[lid]){ State.estudo={ status:"ok", texto:resumoCache[lid] }; render(); return; }
@@ -1561,7 +1561,7 @@ async function openLesson(lid){
     return;
   }
   // 3) sem chave neste aparelho → usa o conteúdo original do professor
-  if(!IA.apiKey.trim()){ if(ativo()){ State.estudo={ status:"fallback", texto:l.texto }; render(); } return; }
+  if(!iaConfigurada()){ if(ativo()){ State.estudo={ status:"fallback", texto:l.texto }; render(); } return; }
 
   // 4) gera o resumo pela IA e salva no cache compartilhado (licoes_geradas)
   const pub = descreverPublico(ALUNO);
@@ -1828,7 +1828,7 @@ async function gerarExplicacao(){
     return;
   }
   // 2) sem chave neste aparelho → mensagem padrão acolhedora
-  if(!IA.apiKey.trim()){ if(aindaValido()) mostrarExplicacao(padrao, respCorreta); return; }
+  if(!iaConfigurada()){ if(aindaValido()) mostrarExplicacao(padrao, respCorreta); return; }
 
   const pub = descreverPublico(ALUNO);
   const prompt =
@@ -1877,7 +1877,7 @@ function mostrarExplicacao(texto, respCorreta){
 // já encontra a explicação pronta ao errar. Só roda em aparelho com a chave configurada.
 let pregerando = false;
 async function pregerarExplicacoes(l){
-  if(pregerando || !l || !IA.apiKey.trim()) return;
+  if(pregerando || !l || !iaConfigurada()) return;
   l.explicacoes = l.explicacoes || {};
   const faltando = (l.exercicios||[]).filter(ex=> ex.id && !l.explicacoes[ex.id]);
   if(!faltando.length) return;
@@ -2385,7 +2385,7 @@ async function regenerarConteudoIA(){
   if(!L || !L.id){ toast("Salve a lição primeiro para gerar o conteúdo compartilhado."); return; }
   const conteudo=(L.texto||"").trim();
   if(!conteudo){ Teacher.iaErro="Escreva o conteúdo da lição antes de gerar."; render(); return; }
-  if(!IA.apiKey.trim()){ Teacher.iaErro="Chave da IA não configurada (peça ao Administrador)."; render(); return; }
+  if(!iaConfigurada()){ Teacher.iaErro="IA não configurada (chave ou proxy). Peça ao Administrador (⚙️ na tela inicial)."; render(); return; }
   if(!confirm("Regenerar o resumo de estudo desta lição com IA? Isso substitui o resumo em cache para todos os dispositivos.")) return;
   Teacher.regenerando=true; Teacher.iaErro=""; render();
   const pub=descreverPublicoLicao(L);
@@ -2471,7 +2471,7 @@ async function gerarExerciciosIA(){
   const L=Teacher.editingLesson;
   const conteudo=(L.texto||"").trim();
   if(!conteudo){ Teacher.iaErro="Escreva o conteúdo da lição antes de gerar."; render(); return; }
-  if(!IA.apiKey.trim()){ Teacher.iaErro="Configure a chave da API no ⚙️."; render(); return; }
+  if(!iaConfigurada()){ Teacher.iaErro="IA não configurada (chave ou proxy). Peça ao Administrador (⚙️ na tela inicial)."; render(); return; }
 
   Teacher.gerando=true; Teacher.iaErro=""; render();
 
