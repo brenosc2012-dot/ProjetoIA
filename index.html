@@ -1675,9 +1675,11 @@ function checkAnswer(){
 }
 
 function nextExercise(){
-  const l=getLesson();
   if(Sess.idx < Sess.total-1){
     Sess.idx++; Sess.respondido=false; Sess.acertouAtual=false; Sess.selecionado=null; Sess.respAluno="";
+    // volta a tela para "exercise" (vinha de "explain"); senão a próxima geração
+    // de explicação seria bloqueada pela guarda State.tela!=="exercise".
+    State.tela="exercise";
     renderExercise();
   } else {
     // concluiu todos
