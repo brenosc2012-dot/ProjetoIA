@@ -15,9 +15,11 @@ Ciências e Inglês.
 > e o progresso do aluno fica na **nuvem** (Firestore), sincronizando entre aparelhos.
 > Níveis de ensino: Fund. I (1º–5º), Fund. II (6º–9º), Médio (1º–3º).
 
-O projeto é **um único arquivo**: `index.html`. Não há build, dependências, frameworks
-nem CDNs externos. HTML + CSS + JavaScript puro (vanilla), tudo inline. Funciona
-offline após o primeiro carregamento.
+O núcleo do app é o **`index.html`** (HTML + CSS + JS puro, tudo inline; sem build/bundler).
+Há poucos arquivos de apoio na raiz: `manifest.json`, `sw.js` (service worker) e `icon.svg`
+para o **PWA** (instalável + offline), e `firestore.rules` (regras de partida do Firestore).
+Firebase entra por CDN. Funciona offline após o primeiro carregamento (o service worker
+faz cache do app shell; HTML em network-first para sempre pegar a versão fresca online).
 
 ## Como rodar
 

@@ -66,6 +66,8 @@ com facilidade — manualmente ou com geração automática de exercícios por I
 - [x] **Cache `licoes_geradas`** — resumo/exercícios reaproveitados entre dispositivos;
       botão "Regenerar conteúdo com IA" no editor.
 - [x] Chave da OpenAI lida só do Firestore (`config/openai.apiKey`, painel Admin); `firestore.rules` no repo. (O mecanismo `config.js`/`.env` foi removido — gerava 404 no GitHub Pages.)
+- [x] Usabilidade: contador "Questão X/Y" + acertos, revisão de erros, login tolerante (nomeNorm), mostrar senha 👁️, pré-visualizar lição, leitura em voz alta (TTS), gestão de alunos (redefinir senha/remover).
+- [x] **PWA**: `manifest.json` + `sw.js` (service worker) + `icon.svg`; instalável e abre offline (HTML em network-first; lições via cache do Firestore).
 
 ### Riscos/limitações da v2.0
 - Auth por hash simples (sem Firebase Auth) + regras de Firestore abertas → dados

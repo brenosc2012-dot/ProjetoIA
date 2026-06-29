@@ -1,0 +1,15 @@
+{
+  "name": "EstudaMais — Aventura de Estudos",
+  "short_name": "EstudaMais",
+  "description": "App de estudos gamificado, do 1º ano do Ensino Fundamental ao 3º ano do Ensino Médio.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#7c5cff",
+  "theme_color": "#7c5cff",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
