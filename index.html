@@ -308,20 +308,13 @@ label{ display:block; font-weight:700; font-size:14px; margin-bottom:6px; color:
 <div id="app"><!-- telas injetadas via JS --></div>
 <div class="toast" id="toast"></div>
 
-<!-- Modal senha do professor -->
-<div class="modal-overlay" id="pwModal">
-  <div class="modal">
-    <h3>🔒 Área do Professor</h3>
-    <p style="text-align:center;color:#777;margin-bottom:14px;font-size:14px">Digite a senha para acessar.</p>
-    <input type="password" id="pwInput" placeholder="Senha" inputmode="text">
-    <button class="btn" onclick="App.checkPassword()">Entrar</button>
-    <button class="btn gray" style="margin-top:10px" onclick="App.closePwModal()">Cancelar</button>
-  </div>
-</div>
-
 <!-- Firebase (módulos compat via CDN — sem bundler/import) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+<!-- Config opcional do cliente (config.js é ignorado pelo git; o app funciona sem ele).
+     Se existir, define window.CONFIG e sobrescreve a config padrão do Firebase. -->
+<script src="config.js" onerror="window.__semConfigJs=true"></script>
 
 <script>
 /* ============================================================
@@ -340,15 +333,37 @@ label{ display:block; font-weight:700; font-size:14px; margin-bottom:6px; color:
 /* ============================================================
    A) DADOS
    ============================================================ */
-const PASSWORD = "professor123";
-// As LIÇÕES ficam no Firebase Firestore (coleção "licoes").
-// O localStorage guarda apenas o progresso/XP do aluno e a config da IA.
-const PROFILE_KEY = "estudamais_perfil_v1";
-const IA_KEY = "estudamais_ia_v1";
+// Senhas-barreira (não são segurança real; só evitam acesso casual).
+const ADMIN_PASSWORD = "admin123";      // abre o painel de Admin (chave da OpenAI)
+// As LIÇÕES, ALUNOS, PROFESSORES e a CONFIG ficam no Firebase Firestore.
+// O localStorage guarda apenas a sessão local e um cache do aluno deste aparelho.
+const SESSAO_KEY = "estudamais_sessao_v2";   // { tipo:"aluno"|"professor", id }
+const ALUNO_CACHE_KEY = "estudamais_aluno_cache_v2"; // cache do doc do aluno logado (offline)
+const IA_MODO_KEY = "estudamais_ia_modo_v1"; // preferência local: substituir | acumular
 const SEED_FLAG = "estudamais_seed_firestore"; // marca que já semeamos os exemplos neste navegador
 
+// ----- Níveis de ensino e anos (Fund. I, Fund. II, Médio) -----
+const NIVEIS_ENSINO = [
+  { id:"fund1", nome:"Ensino Fundamental I",  anos:["1º ano","2º ano","3º ano","4º ano","5º ano"] },
+  { id:"fund2", nome:"Ensino Fundamental II", anos:["6º ano","7º ano","8º ano","9º ano"] },
+  { id:"medio", nome:"Ensino Médio",          anos:["1º ano EM","2º ano EM","3º ano EM"] },
+];
+function nivelById(id){ return NIVEIS_ENSINO.find(n=>n.id===id) || NIVEIS_ENSINO[0]; }
+function nomeNivel(id){ return nivelById(id).nome; }
+
+// Descreve a faixa etária do aluno para adaptar a linguagem da IA.
+function descreverPublico(aluno){
+  const a = aluno || ALUNO || {};
+  const ano = a.ano || "5º ano";
+  const nivel = nomeNivel(a.nivel || "fund1");
+  const idade = a.idade ? a.idade : 10;
+  return { ano, nivel, idade,
+    frase:`Adapte a linguagem e a complexidade para um aluno do ${ano} do ${nivel}, com aproximadamente ${idade} anos.` };
+}
+
 // ----- Firebase / Firestore -----
-const firebaseConfig = {
+// Config pública por natureza; window.CONFIG (config.js) sobrescreve se existir.
+const firebaseConfig = (window.CONFIG && window.CONFIG.FIREBASE) ? window.CONFIG.FIREBASE : {
   apiKey: "AIzaSyDE5ikPdDSc0-olqnSlV1F1uKiOV-TCofk",
   authDomain: "estudamais-5cb1b.firebaseapp.com",
   projectId: "estudamais-5cb1b",
@@ -366,19 +381,42 @@ function initFirebase(){
   try{ db.enablePersistence({ synchronizeTabs:true }).catch(function(){}); }catch(e){}
 }
 
-// Configuração da geração por IA (Groq, gratuito). Salva em localStorage.
-const IA_MODELO = "llama-3.1-8b-instant";
-const IA_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+// ----- Configuração da IA: OpenAI GPT-4o-mini -----
+// A chave é compartilhada via Firestore (coleção "config", doc "app"), cadastrada
+// no painel de Admin. config.js pode trazer uma chave de desenvolvimento local.
+const IA_MODELO = "gpt-4o-mini";
+const IA_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 let IA = { apiKey:"", modo:"substituir" }; // modo: substituir | acumular
 function loadIA(){
-  try{
-    const r=localStorage.getItem(IA_KEY);
-    if(r){ const o=JSON.parse(r); IA.apiKey=o.apiKey||""; IA.modo=o.modo||"substituir"; return; }
-  }catch(e){}
-  // primeira execução: cria a chave já com valores padrão (vazios)
-  saveIA();
+  // modo de geração é uma preferência local (não precisa ir à nuvem)
+  try{ const m=localStorage.getItem(IA_MODO_KEY); if(m==="substituir"||m==="acumular") IA.modo=m; }catch(e){}
+  // chave de desenvolvimento opcional vinda do config.js
+  if(window.CONFIG && window.CONFIG.OPENAI_API_KEY) IA.apiKey = window.CONFIG.OPENAI_API_KEY;
 }
-function saveIA(){ try{ localStorage.setItem(IA_KEY, JSON.stringify(IA)); }catch(e){} }
+function saveIaModo(){ try{ localStorage.setItem(IA_MODO_KEY, IA.modo); }catch(e){} }
+
+// Lê a chave da OpenAI salva no Firestore (config/app). Best-effort.
+async function carregarChaveIA(){
+  if(!db) return;
+  try{
+    const doc = await db.collection("config").doc("app").get();
+    if(doc.exists){ const d=doc.data()||{}; if(d.openaiApiKey) IA.apiKey = d.openaiApiKey; }
+  }catch(e){ /* sem permissão/rede: segue sem chave compartilhada */ }
+}
+
+// ----- Hash simples de senha (SHA-256, client-only) -----
+// Barreira, não segurança real: protege contra leitura casual da senha em claro.
+async function hashSenha(senha){
+  const txt = String(senha==null?"":senha);
+  try{
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+  }catch(e){
+    // fallback simples caso SubtleCrypto não esteja disponível (ex.: file:// em navegador antigo)
+    let h=0; for(let i=0;i<txt.length;i++){ h=((h<<5)-h+txt.charCodeAt(i))|0; }
+    return "f"+(h>>>0).toString(16);
+  }
+}
 
 // Definição estática das disciplinas: id, nome, ícone (emoji), cor temática
 const SUBJECTS = [
@@ -593,7 +631,10 @@ function seedData(){
    B) ESTADO & UTILITÁRIOS
    ============================================================ */
 let DATA = {};      // { subjId: [ {id,titulo,texto,exercicios:[...]} ] }
-let PROFILE = {};   // perfil/progresso do aluno
+let PROFILE = {};   // alias do aluno logado (mantido por compatibilidade com a gamificação)
+let SESSAO = null;     // sessão local: { tipo:"aluno"|"professor", id }
+let ALUNO = null;      // doc do aluno logado (Firestore); referenciado também como PROFILE
+let PROFESSOR = null;  // doc do professor logado (Firestore)
 const app = document.getElementById("app");
 
 function uid(){ return "id" + Math.random().toString(36).slice(2,9) + Date.now().toString(36).slice(-3); }
@@ -611,7 +652,11 @@ function licaoDeDoc(id, d){
     texto:d.conteudo||"",
     exercicios:Array.isArray(d.exercicios)?d.exercicios:[],
     resumoIA: d.resumoIA||"",
-    explicacoes: (d.explicacoes && typeof d.explicacoes==="object") ? d.explicacoes : {}
+    explicacoes: (d.explicacoes && typeof d.explicacoes==="object") ? d.explicacoes : {},
+    // escopo (Fase B): turma e ano/nível a que a lição se destina ("" = todas)
+    turma: d.turma||"",
+    ano: d.ano||"",
+    nivel: d.nivel||""
   };
 }
 function removeLicaoLocal(id){ SUBJECTS.forEach(s=>{ DATA[s.id]=(DATA[s.id]||[]).filter(l=>l.id!==id); }); }
@@ -684,21 +729,52 @@ async function seedFirestore(){
   }
 }
 
-function defaultProfile(){
-  const p={ nome:"Aluno(a)", xpTotal:0, streak:0, ultimoDia:null, medalhas:[], som:true, disciplinas:{} };
-  SUBJECTS.forEach(s=> p.disciplinas[s.id]={ xp:0, nivel:1, licoesConcluidas:[] });
-  return p;
+// Estrutura de gamificação que vive DENTRO do doc do aluno.
+function novaGamificacao(){
+  const g={ xpTotal:0, streak:0, ultimoDia:null, medalhas:[], premiacoes:[], som:true, disciplinas:{}, licoesConcluidas:[] };
+  SUBJECTS.forEach(s=> g.disciplinas[s.id]={ xp:0, nivel:1, licoesConcluidas:[] });
+  return g;
 }
-function loadProfile(){
-  try{ const raw=localStorage.getItem(PROFILE_KEY); if(raw){ PROFILE=JSON.parse(raw);
-        // garantir estrutura para disciplinas e campos novos (compatibilidade)
-        SUBJECTS.forEach(s=>{ if(!PROFILE.disciplinas[s.id]) PROFILE.disciplinas[s.id]={xp:0,nivel:1,licoesConcluidas:[]}; });
-        if(!Array.isArray(PROFILE.medalhas)) PROFILE.medalhas=[];
-        if(typeof PROFILE.som!=="boolean") PROFILE.som=true;
-        return; } }catch(e){}
-  PROFILE = defaultProfile(); saveProfile();
+// Garante que um doc de aluno tenha todos os campos esperados (compatibilidade).
+function normalizarAluno(a){
+  a = a || {};
+  if(typeof a.xpTotal!=="number") a.xpTotal=0;
+  if(typeof a.streak!=="number") a.streak=0;
+  if(!("ultimoDia" in a)) a.ultimoDia=null;
+  if(!Array.isArray(a.medalhas)) a.medalhas=[];
+  if(!Array.isArray(a.premiacoes)) a.premiacoes=[];
+  if(typeof a.som!=="boolean") a.som=true;
+  if(!a.disciplinas || typeof a.disciplinas!=="object") a.disciplinas={};
+  SUBJECTS.forEach(s=>{ if(!a.disciplinas[s.id]) a.disciplinas[s.id]={xp:0,nivel:1,licoesConcluidas:[]}; });
+  if(!Array.isArray(a.licoesConcluidas)) a.licoesConcluidas=[];
+  if(!a.nome) a.nome="Aluno(a)";
+  if(!a.nivel) a.nivel="fund1";
+  if(!a.ano) a.ano="5º ano";
+  if(!a.turma) a.turma="A";
+  return a;
 }
-function saveProfile(){ try{ localStorage.setItem(PROFILE_KEY, JSON.stringify(PROFILE)); }catch(e){} }
+
+// Define o aluno logado e o expõe como PROFILE (reaproveita toda a gamificação).
+function definirAlunoLogado(a){ ALUNO = normalizarAluno(a); PROFILE = ALUNO; }
+
+// Persiste o progresso do aluno: cache local (offline) + write-through no Firestore.
+function saveProfile(){
+  if(!ALUNO) return;
+  // espelho plano de licoesConcluidas (união das disciplinas) — atende o spec/consultas
+  const flat=[];
+  SUBJECTS.forEach(s=>{ const d=ALUNO.disciplinas[s.id]; if(d) d.licoesConcluidas.forEach(id=>{ if(flat.indexOf(id)<0) flat.push(id); }); });
+  ALUNO.licoesConcluidas = flat;
+  try{ localStorage.setItem(ALUNO_CACHE_KEY, JSON.stringify({ id:ALUNO.id, doc:ALUNO })); }catch(e){}
+  if(db && ALUNO.id){
+    const payload = Object.assign({}, ALUNO); delete payload.id;
+    try{ db.collection("alunos").doc(ALUNO.id).set(payload, { merge:true }); }catch(e){}
+  }
+}
+
+// ----- Sessão local (quem está logado neste aparelho) -----
+function salvarSessao(){ try{ if(SESSAO) localStorage.setItem(SESSAO_KEY, JSON.stringify(SESSAO)); else localStorage.removeItem(SESSAO_KEY); }catch(e){} }
+function carregarSessao(){ try{ const r=localStorage.getItem(SESSAO_KEY); if(r) SESSAO=JSON.parse(r); }catch(e){ SESSAO=null; } }
+function logout(){ SESSAO=null; ALUNO=null; PROFESSOR=null; PROFILE={}; salvarSessao(); try{ localStorage.removeItem(ALUNO_CACHE_KEY); }catch(e){} State.tela="landing"; render(); }
 
 function subjById(id){ return SUBJECTS.find(s=>s.id===id); }
 
@@ -828,7 +904,7 @@ function verificarMedalhas(ctx){
 /* ============================================================
    D) UI DO ALUNO
    ============================================================ */
-const State = { tela:"home", subj:null, lesson:null, estudo:null, explic:null };
+const State = { tela:"landing", subj:null, lesson:null, estudo:null, explic:null, authErro:"", authBusy:false };
 // estado de uma sessão de exercícios
 let Sess = null;
 // cache de resumos gerados por IA nesta sessão: { lessonId: textoResumo }
@@ -838,6 +914,12 @@ let estudoTimer = null;
 
 function render(){
   switch(State.tela){
+    case "landing":      renderLanding(); break;
+    case "loginAluno":   renderLoginAluno(); break;
+    case "cadastroAluno":renderCadastroAluno(); break;
+    case "loginProf":    renderLoginProf(); break;
+    case "cadastroProf": renderCadastroProf(); break;
+    case "admin":        renderAdmin(); break;
     case "home":      renderHome(); break;
     case "lessons":   renderLessons(); break;
     case "study":     renderStudy(); break;
@@ -846,11 +928,255 @@ function render(){
     case "done":      renderDone(); break;
     case "profile":   renderProfile(); break;
     case "teacher":   renderTeacher(); break;
-    default: renderHome();
+    default: renderLanding();
   }
 }
 
 function goHome(){ clearInterval(estudoTimer); State.tela="home"; render(); }
+
+/* ============================================================
+   D0) AUTENTICAÇÃO (landing, login/cadastro de aluno e professor, admin)
+   ============================================================ */
+let Form = {};                 // estado temporário dos formulários de auth
+function val(id){ const e=document.getElementById(id); return e? e.value : ""; }
+function nivelOptions(sel){ return NIVEIS_ENSINO.map(n=>`<option value="${n.id}" ${n.id===sel?'selected':''}>${esc(n.nome)}</option>`).join(""); }
+function anoOptions(nivelId, anoSel){ return nivelById(nivelId).anos.map(a=>`<option value="${esc(a)}" ${a===anoSel?'selected':''}>${esc(a)}</option>`).join(""); }
+
+// Casca comum das telas de auth: topo opcional + conteúdo centralizado.
+function authShell(corpo, voltarTela){
+  const topo = voltarTela ? `<div class="topbar"><button class="back-btn" onclick="App.irTela('${voltarTela}')">←</button><h2>EstudaMais</h2></div>` : "";
+  return `<div class="screen active">${topo}
+    <div class="content" style="max-width:420px;margin:0 auto;width:100%">${corpo}</div>
+  </div>`;
+}
+function authErroHtml(){ return State.authErro ? `<div class="ia-erro">⚠️ ${esc(State.authErro)}</div>` : ""; }
+function authBusyBtn(label){ return State.authBusy ? `<button class="btn" disabled><span class="ia-spinner" style="width:18px;height:18px;border-color:rgba(255,255,255,.4);border-top-color:#fff;vertical-align:middle"></span> Aguarde...</button>` : label; }
+
+// ----- LANDING: escolha de perfil -----
+function renderLanding(){
+  app.innerHTML = authShell(`
+    <div style="text-align:center;margin:20px 0 8px">${mascot('bounce')}</div>
+    <h1 style="text-align:center;color:var(--brand);font-size:26px;margin-bottom:4px">EstudaMais</h1>
+    <p style="text-align:center;color:#777;margin-bottom:24px">Aventura de estudos do 1º ano ao Ensino Médio 🚀</p>
+    <button class="btn" onclick="App.irTela('loginAluno')">🎒 Sou Aluno</button>
+    <button class="btn blue" style="margin-top:12px" onclick="App.irTela('loginProf')">👩‍🏫 Sou Professor</button>
+    <button class="btn gray" style="margin-top:24px" onclick="App.irTela('admin')">⚙️ Administrador</button>
+  `, null);
+}
+
+// ----- ALUNO: login -----
+function renderLoginAluno(){
+  app.innerHTML = authShell(`
+    <h2 style="margin:10px 0 16px">🎒 Entrar como Aluno</h2>
+    ${authErroHtml()}
+    <label>Nome completo</label>
+    <input id="laNome" placeholder="Seu nome completo" autocomplete="off">
+    <label>Senha</label>
+    <input id="laSenha" type="password" placeholder="Sua senha" autocomplete="off">
+    ${authBusyBtn(`<button class="btn" onclick="App.submitLoginAluno()">Entrar</button>`)}
+    <button class="btn gray" style="margin-top:12px" onclick="App.irCadastroAluno()">Ainda não tenho conta — Cadastrar</button>
+  `, "landing");
+}
+function irCadastroAluno(){ Form={ nivel:"fund1", ano:"1º ano" }; State.authErro=""; State.tela="cadastroAluno"; render(); }
+async function submitLoginAluno(){
+  const nome=val('laNome').trim(), senha=val('laSenha');
+  if(!nome||!senha){ State.authErro="Informe nome e senha."; render(); return; }
+  State.authBusy=true; State.authErro=""; render();
+  try{
+    const snap = await db.collection("alunos").where("nome","==",nome).get();
+    if(snap.empty) throw new Error("nao_encontrado");
+    const h = await hashSenha(senha);
+    let achou=null;
+    snap.forEach(d=>{ if(!achou && d.data().senha===h) achou={ id:d.id, data:d.data() }; });
+    if(!achou) throw new Error("senha");
+    const doc = Object.assign({}, achou.data, { id:achou.id }); delete doc.criadoEm;
+    definirAlunoLogado(doc);
+    SESSAO={ tipo:"aluno", id:achou.id }; salvarSessao();
+    State.authBusy=false; State.tela="home"; render();
+  }catch(e){
+    State.authBusy=false;
+    State.authErro = e.message==="nao_encontrado" ? "Aluno não encontrado." : (e.message==="senha" ? "Senha incorreta." : "Erro ao entrar. Verifique a conexão.");
+    render();
+  }
+}
+
+// ----- ALUNO: cadastro -----
+function renderCadastroAluno(){
+  app.innerHTML = authShell(`
+    <h2 style="margin:10px 0 16px">🎒 Criar conta de Aluno</h2>
+    ${authErroHtml()}
+    <label>Nome completo</label>
+    <input id="caNome" value="${esc(Form.nome||'')}" placeholder="Seu nome completo" autocomplete="off">
+    <label>Idade</label>
+    <input id="caIdade" type="number" min="5" max="20" value="${esc(Form.idade||'')}" placeholder="Ex: 10">
+    <label>Nível de ensino</label>
+    <select id="caNivel" onchange="App.onNivelCadAluno(this.value)">${nivelOptions(Form.nivel)}</select>
+    <label>Ano cursando</label>
+    <select id="caAno">${anoOptions(Form.nivel, Form.ano)}</select>
+    <label>Turma</label>
+    <input id="caTurma" value="${esc(Form.turma||'')}" placeholder="Ex: A" autocomplete="off">
+    <label>Senha de acesso</label>
+    <input id="caSenha" type="password" value="${esc(Form.senha||'')}" placeholder="Crie uma senha" autocomplete="off">
+    ${authBusyBtn(`<button class="btn" onclick="App.submitCadastroAluno()">Cadastrar e entrar</button>`)}
+    <button class="btn gray" style="margin-top:12px" onclick="App.irTela('loginAluno')">Já tenho conta</button>
+  `, "landing");
+}
+function onNivelCadAluno(v){
+  Form.nome=val('caNome'); Form.idade=val('caIdade'); Form.turma=val('caTurma'); Form.senha=val('caSenha');
+  Form.nivel=v; Form.ano=nivelById(v).anos[0]; render();
+}
+async function submitCadastroAluno(){
+  const nome=val('caNome').trim(), idade=parseInt(val('caIdade'),10),
+        turma=val('caTurma').trim().toUpperCase(), senha=val('caSenha'),
+        nivel=val('caNivel')||Form.nivel, ano=val('caAno')||Form.ano;
+  if(!nome||!senha||!turma||!idade || isNaN(idade)){ State.authErro="Preencha todos os campos."; render(); return; }
+  State.authBusy=true; State.authErro=""; render();
+  try{
+    const senhaHash = await hashSenha(senha);
+    const base = Object.assign(novaGamificacao(), { nome, idade, ano, nivel, turma, senha:senhaHash });
+    const ref = await db.collection("alunos").add(Object.assign({}, base, { criadoEm: firebase.firestore.FieldValue.serverTimestamp() }));
+    base.id = ref.id;
+    definirAlunoLogado(base);
+    SESSAO={ tipo:"aluno", id:ref.id }; salvarSessao();
+    State.authBusy=false; State.tela="home"; render();
+  }catch(e){ State.authBusy=false; State.authErro="Não foi possível cadastrar. Verifique a conexão."; render(); }
+}
+
+// ----- PROFESSOR: login -----
+function renderLoginProf(){
+  app.innerHTML = authShell(`
+    <h2 style="margin:10px 0 16px">👩‍🏫 Entrar como Professor</h2>
+    ${authErroHtml()}
+    <label>E-mail</label>
+    <input id="lpEmail" type="email" placeholder="seu@email.com" autocomplete="off">
+    <label>Senha</label>
+    <input id="lpSenha" type="password" placeholder="Sua senha" autocomplete="off">
+    ${authBusyBtn(`<button class="btn blue" onclick="App.submitLoginProf()">Entrar</button>`)}
+    <button class="btn gray" style="margin-top:12px" onclick="App.irCadastroProf()">Ainda não tenho conta — Cadastrar</button>
+  `, "landing");
+}
+function irCadastroProf(){ Form={ disc:[] }; State.authErro=""; State.tela="cadastroProf"; render(); }
+async function submitLoginProf(){
+  const email=val('lpEmail').trim().toLowerCase(), senha=val('lpSenha');
+  if(!email||!senha){ State.authErro="Informe e-mail e senha."; render(); return; }
+  State.authBusy=true; State.authErro=""; render();
+  try{
+    const snap = await db.collection("professores").where("email","==",email).get();
+    if(snap.empty) throw new Error("nao_encontrado");
+    const h = await hashSenha(senha);
+    let achou=null;
+    snap.forEach(d=>{ if(!achou && d.data().senha===h) achou={ id:d.id, data:d.data() }; });
+    if(!achou) throw new Error("senha");
+    PROFESSOR = Object.assign({}, achou.data, { id:achou.id });
+    SESSAO={ tipo:"professor", id:achou.id }; salvarSessao();
+    State.authBusy=false; State.tela="teacher"; Teacher.tab="licoes"; render();
+  }catch(e){
+    State.authBusy=false;
+    State.authErro = e.message==="nao_encontrado" ? "Professor não encontrado." : (e.message==="senha" ? "Senha incorreta." : "Erro ao entrar. Verifique a conexão.");
+    render();
+  }
+}
+
+// ----- PROFESSOR: cadastro -----
+function renderCadastroProf(){
+  const discChecks = SUBJECTS.map(s=>{
+    const on = (Form.disc||[]).indexOf(s.id)>=0;
+    return `<button type="button" class="opt" style="margin-bottom:8px;${on?'border-color:var(--blue);background:#ddf4ff;color:#1899d6':''}" onclick="App.toggleDiscCad('${s.id}')">
+      <span>${s.icon} ${esc(s.nome)}</span><span style="margin-left:auto">${on?'✓':''}</span></button>`;
+  }).join("");
+  app.innerHTML = authShell(`
+    <h2 style="margin:10px 0 16px">👩‍🏫 Criar conta de Professor</h2>
+    ${authErroHtml()}
+    <label>Nome</label>
+    <input id="cpNome" value="${esc(Form.nome||'')}" placeholder="Seu nome" autocomplete="off">
+    <label>E-mail</label>
+    <input id="cpEmail" type="email" value="${esc(Form.email||'')}" placeholder="seu@email.com" autocomplete="off">
+    <label>Senha</label>
+    <input id="cpSenha" type="password" value="${esc(Form.senha||'')}" placeholder="Crie uma senha" autocomplete="off">
+    <label>Turmas que leciona (separadas por vírgula)</label>
+    <input id="cpTurmas" value="${esc(Form.turmas||'')}" placeholder="Ex: A, B, C" autocomplete="off">
+    <label>Disciplinas que leciona</label>
+    ${discChecks}
+    ${authBusyBtn(`<button class="btn blue" style="margin-top:8px" onclick="App.submitCadastroProf()">Cadastrar e entrar</button>`)}
+    <button class="btn gray" style="margin-top:12px" onclick="App.irTela('loginProf')">Já tenho conta</button>
+  `, "landing");
+}
+function toggleDiscCad(id){
+  Form.nome=val('cpNome'); Form.email=val('cpEmail'); Form.senha=val('cpSenha'); Form.turmas=val('cpTurmas');
+  Form.disc = Form.disc||[];
+  const i=Form.disc.indexOf(id);
+  if(i>=0) Form.disc.splice(i,1); else Form.disc.push(id);
+  render();
+}
+async function submitCadastroProf(){
+  const nome=val('cpNome').trim(), email=val('cpEmail').trim().toLowerCase(), senha=val('cpSenha');
+  const turmas=val('cpTurmas').split(",").map(t=>t.trim().toUpperCase()).filter(Boolean);
+  const disciplinas=(Form.disc||[]).slice();
+  if(!nome||!email||!senha){ State.authErro="Preencha nome, e-mail e senha."; render(); return; }
+  if(!turmas.length){ State.authErro="Informe ao menos uma turma."; render(); return; }
+  if(!disciplinas.length){ State.authErro="Selecione ao menos uma disciplina."; render(); return; }
+  State.authBusy=true; State.authErro=""; render();
+  try{
+    // e-mail já cadastrado?
+    const ja = await db.collection("professores").where("email","==",email).get();
+    if(!ja.empty) throw new Error("email_existe");
+    const senhaHash = await hashSenha(senha);
+    const base = { nome, email, senha:senhaHash, turmas, disciplinas };
+    const ref = await db.collection("professores").add(Object.assign({}, base, { criadoEm: firebase.firestore.FieldValue.serverTimestamp() }));
+    PROFESSOR = Object.assign({}, base, { id:ref.id });
+    SESSAO={ tipo:"professor", id:ref.id }; salvarSessao();
+    State.authBusy=false; State.tela="teacher"; Teacher.tab="licoes"; render();
+  }catch(e){
+    State.authBusy=false;
+    State.authErro = e.message==="email_existe" ? "Já existe uma conta com este e-mail." : "Não foi possível cadastrar. Verifique a conexão.";
+    render();
+  }
+}
+
+// ----- ADMIN: configuração da chave da OpenAI (salva no Firestore) -----
+function renderAdmin(){
+  if(!State.adminAuth){
+    app.innerHTML = authShell(`
+      <h2 style="margin:10px 0 16px">⚙️ Administrador</h2>
+      <p style="color:#777;font-size:14px;margin-bottom:14px">Área restrita para configurar a chave da IA (OpenAI).</p>
+      ${authErroHtml()}
+      <label>Senha de administrador</label>
+      <input id="admSenha" type="password" placeholder="Senha de admin" autocomplete="off">
+      <button class="btn" onclick="App.submitAdminSenha()">Entrar</button>
+    `, "landing");
+    setTimeout(()=>{ const e=document.getElementById("admSenha"); if(e){ e.focus(); e.onkeydown=ev=>{ if(ev.key==="Enter") submitAdminSenha(); }; } },80);
+    return;
+  }
+  const temChave = (IA.apiKey||"").trim().length>0;
+  app.innerHTML = authShell(`
+    <h2 style="margin:10px 0 16px">⚙️ Configuração da IA</h2>
+    ${authErroHtml()}
+    <div class="ia-panel">
+      <p style="font-size:13px;color:#555;margin-bottom:8px">Modelo: <b>${IA_MODELO}</b> (OpenAI). A chave é salva no Firestore (coleção <code>config</code>) e usada por todos os dispositivos.</p>
+      <p style="font-size:12px;color:#c0392b;margin-bottom:10px">⚠️ A chave fica legível por quem acessar o Firestore. Não use uma chave sem limite de gastos.</p>
+      <label>OpenAI API Key</label>
+      <input id="admKey" type="password" value="${esc(IA.apiKey||'')}" placeholder="sk-..." autocomplete="off">
+      <p style="font-size:12px;color:#1a73e8;margin:-4px 0 10px">🔑 Obtenha em <b>platform.openai.com</b> → API Keys. Status atual: ${temChave?'✅ configurada':'❌ não configurada'}.</p>
+      ${authBusyBtn(`<button class="btn" onclick="App.salvarChaveOpenAI()">💾 Salvar chave no Firestore</button>`)}
+    </div>
+    <button class="btn gray" style="margin-top:12px" onclick="App.irTela('landing')">Voltar</button>
+  `, "landing");
+}
+function submitAdminSenha(){
+  if(val('admSenha')===ADMIN_PASSWORD){ State.adminAuth=true; State.authErro=""; }
+  else State.authErro="Senha de administrador incorreta.";
+  render();
+}
+async function salvarChaveOpenAI(){
+  const k=val('admKey').trim();
+  State.authBusy=true; State.authErro=""; render();
+  try{
+    await db.collection("config").doc("app").set({ openaiApiKey:k, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
+    IA.apiKey=k; State.authBusy=false; toast("Chave salva no Firestore! ✅"); render();
+  }catch(e){ State.authBusy=false; State.authErro="Erro ao salvar a chave (verifique as regras do Firestore)."; render(); }
+}
+
+function irTela(t){ State.authErro=""; State.authBusy=false; if(t==="admin") State.adminAuth=false; State.tela=t; render(); }
 
 // ----- HOME: seleção de disciplinas -----
 function renderHome(){
@@ -878,7 +1204,7 @@ function renderHome(){
         ${mascot('bounce')}
         <div style="flex:1">
           <div class="greeting">Olá, ${esc(PROFILE.nome)}! 👋</div>
-          <div class="sub">Pronto para aprender hoje?</div>
+          <div class="sub">${esc(PROFILE.ano||'')} • Turma ${esc(PROFILE.turma||'')} — pronto para aprender? 🚀</div>
         </div>
       </div>
       <div class="stat-row">
@@ -891,7 +1217,7 @@ function renderHome(){
       <h2 style="margin-bottom:12px">Escolha uma disciplina</h2>
       <div class="subj-grid">${cards}</div>
       <button class="btn gray" style="margin-top:18px" onclick="App.openProfile()">👤 Meu Perfil</button>
-      <button class="btn gray" style="margin-top:10px" onclick="App.openPwModal()">👩‍🏫 Área do Professor</button>
+      <button class="btn gray" style="margin-top:10px" onclick="App.logout()">🚪 Sair</button>
       <p style="text-align:center;color:#bbb;font-size:12px;margin-top:16px">EstudaMais • ${totalLicoes} lições disponíveis</p>
     </div>
   </div>`;
@@ -1399,8 +1725,8 @@ function renderProfile(){
     <div class="topbar"><button class="back-btn" onclick="App.goHome()">←</button><h2>👤 Meu Perfil</h2></div>
     <div class="content">
       <div style="text-align:center;margin-bottom:10px">${mascot('')}
-        <div style="margin-top:6px"><input id="nomeInput" value="${esc(PROFILE.nome)}" style="text-align:center;font-weight:800;font-size:18px;max-width:240px;margin:0 auto" onchange="App.saveName(this.value)"></div>
-        <div style="color:#777;font-size:13px">Toque no nome para editar ✏️</div>
+        <div style="margin-top:6px;font-weight:800;font-size:20px">${esc(PROFILE.nome)}</div>
+        <div style="color:#777;font-size:13px">${esc(PROFILE.idade||'')} anos • ${esc(PROFILE.ano||'')} • ${esc(nomeNivel(PROFILE.nivel))} • Turma ${esc(PROFILE.turma||'')}</div>
       </div>
       <div class="stat-row" style="margin-bottom:16px">
         <div class="stat-pill" style="background:#fff3cd;color:#856404"><div class="v">🔥 ${PROFILE.streak}</div><div class="l">Ofensiva</div></div>
@@ -1416,14 +1742,17 @@ function renderProfile(){
 
       <button class="btn ${PROFILE.som?'blue':'gray'}" style="margin-top:14px" onclick="App.toggleSound()">${PROFILE.som?'🔊 Som: Ligado':'🔇 Som: Desligado'}</button>
       <button class="btn gray" style="margin-top:10px" onclick="App.resetProgress()">🗑️ Zerar meu progresso</button>
+      <button class="btn gray" style="margin-top:10px" onclick="App.logout()">🚪 Sair da conta</button>
     </div>
   </div>`;
 }
 function toggleSound(){ PROFILE.som=!PROFILE.som; saveProfile(); if(PROFILE.som){ Sound.init(); Sound.correct(); } render(); }
-function saveName(v){ PROFILE.nome=(v||"").trim()||"Aluno(a)"; saveProfile(); toast("Nome salvo!"); }
 function resetProgress(){
-  if(confirm("Tem certeza que deseja zerar TODO o seu progresso (XP, níveis, ofensiva)?")){
-    PROFILE=defaultProfile(); saveProfile(); toast("Progresso zerado."); goHome();
+  if(confirm("Tem certeza que deseja zerar TODO o seu progresso (XP, níveis, ofensiva)? Sua conta será mantida.")){
+    // zera apenas a gamificação, preservando a identidade (nome, idade, ano, turma, senha)
+    const g=novaGamificacao();
+    ["xpTotal","streak","ultimoDia","medalhas","premiacoes","disciplinas","licoesConcluidas"].forEach(k=> ALUNO[k]=g[k]);
+    saveProfile(); toast("Progresso zerado."); goHome();
   }
 }
 
@@ -1431,14 +1760,6 @@ function resetProgress(){
    E) UI DO PROFESSOR
    ============================================================ */
 const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, iaErro:"", iaConfigAberta:false };
-
-function openPwModal(){ document.getElementById("pwModal").classList.add("show"); setTimeout(()=>document.getElementById("pwInput").focus(),100); }
-function closePwModal(){ document.getElementById("pwModal").classList.remove("show"); document.getElementById("pwInput").value=""; }
-function checkPassword(){
-  const v=document.getElementById("pwInput").value;
-  if(v===PASSWORD){ closePwModal(); State.tela="teacher"; Teacher.tab="licoes"; render(); }
-  else { toast("Senha incorreta!"); document.getElementById("pwInput").value=""; }
-}
 
 function renderTeacher(){
   let inner;
@@ -1448,8 +1769,8 @@ function renderTeacher(){
 
   app.innerHTML = `<div class="screen active">
     <div class="topbar" style="background:#9b59b6;color:#fff">
-      <button class="back-btn" style="color:#fff" onclick="App.goHome()">←</button>
-      <h2>👩‍🏫 Painel do Professor</h2>
+      <button class="back-btn" style="color:#fff" onclick="App.logout()" title="Sair">←</button>
+      <h2>👩‍🏫 ${esc(PROFESSOR&&PROFESSOR.nome?PROFESSOR.nome:'Painel do Professor')}</h2>
     </div>
     <div class="teacher-tabs">
       <button class="teacher-tab ${Teacher.tab==='licoes'?'active':''}" onclick="App.teacherTab('licoes')">📋 Lições</button>
@@ -1534,7 +1855,7 @@ function teacherEditorTab(){
     <button class="btn gray" style="margin-top:10px" onclick="App.teacherTab('licoes')">Cancelar</button>`;
 }
 
-// ---- PAINEL DE GERAÇÃO POR IA (Groq / llama-3.1-8b-instant, gratuito) ----
+// ---- PAINEL DE GERAÇÃO POR IA (OpenAI / gpt-4o-mini; chave compartilhada via Admin) ----
 function iaPanel(L){
   const temTexto = (L.texto||"").trim().length>0;
   const temChave = (IA.apiKey||"").trim().length>0;
@@ -1542,7 +1863,7 @@ function iaPanel(L){
   // estado de carregamento
   if(Teacher.gerando){
     return `<div class="ia-panel">
-      <div class="ia-loading"><span class="ia-spinner"></span> Gerando exercícios com IA...</div>
+      <div class="ia-loading"><span class="ia-spinner"></span> Gerando 15 exercícios com IA...</div>
       <p style="font-size:12px;color:#777;text-align:center;margin-top:6px">Isso pode levar alguns segundos.</p>
     </div>`;
   }
@@ -1551,16 +1872,12 @@ function iaPanel(L){
   const configAberta = Teacher.iaConfigAberta;
 
   const config = configAberta ? `
-    <label>Groq API Key</label>
-    <input type="password" id="iaKey" value="${esc(IA.apiKey)}" placeholder="gsk_..." autocomplete="off">
-    <p style="font-size:11px;color:#999;margin-top:-6px">🔒 Salva apenas neste navegador (localStorage). Não compartilhe esta chave.</p>
-    <p style="font-size:12px;color:#1a73e8;margin:0 0 10px">🔑 Obtenha uma chave <b>gratuita</b> em <b>console.groq.com</b> → "API Keys".</p>
     <label>Ao gerar, os exercícios devem:</label>
     <select id="iaModo" onchange="App.setModoIA(this.value)">
       <option value="substituir" ${IA.modo==='substituir'?'selected':''}>Substituir os exercícios atuais</option>
       <option value="acumular" ${IA.modo==='acumular'?'selected':''}>Acumular (somar aos atuais)</option>
     </select>
-    <button class="btn gray small" style="width:100%" onclick="App.salvarChaveIA()">💾 Salvar configuração da IA</button>
+    <p style="font-size:12px;color:#999;margin-top:-4px">A chave da OpenAI é configurada pelo Administrador (⚙️ na tela inicial) e compartilhada entre os dispositivos.</p>
   ` : "";
 
   return `<div class="ia-panel">
@@ -1568,23 +1885,18 @@ function iaPanel(L){
       <b>🤖 Gerar Exercícios com IA</b>
       <button class="icon-btn" style="background:transparent;font-size:15px" onclick="App.toggleIaConfig()" title="Configurar">⚙️</button>
     </div>
-    <p style="font-size:12px;color:#777;margin-bottom:8px">Cria 5 exercícios variados (3 múltipla escolha, 1 V/F, 1 lacuna) com base no conteúdo acima, usando o Groq (${IA_MODELO}) — gratuito.</p>
+    <p style="font-size:12px;color:#777;margin-bottom:8px">Cria <b>15 exercícios</b> (5 fáceis, 5 intermediários, 5 difíceis) com base no conteúdo acima e na faixa etária da turma, usando a OpenAI (${IA_MODELO}).</p>
     ${erro}
     ${config}
     <button class="btn" style="background:#9b59b6;box-shadow:0 4px 0 #7d3c98;margin-top:4px" ${(!temTexto||!temChave)?'disabled':''} onclick="App.gerarExerciciosIA()">
-      ✨ Gerar Exercícios com IA
+      ✨ Gerar 15 Exercícios com IA
     </button>
-    ${!temChave ? `<p style="font-size:12px;color:#c0392b;text-align:center;margin-top:6px">Configure sua Groq API Key (gratuita) no ⚙️ para habilitar.</p>`
+    ${!temChave ? `<p style="font-size:12px;color:#c0392b;text-align:center;margin-top:6px">Chave da IA não configurada. Peça ao Administrador para cadastrá-la (⚙️ na tela inicial).</p>`
       : (!temTexto ? `<p style="font-size:12px;color:#c0392b;text-align:center;margin-top:6px">Escreva o conteúdo da lição primeiro.</p>`:'')}
   </div>`;
 }
 function toggleIaConfig(){ syncTextInputs(); Teacher.iaConfigAberta=!Teacher.iaConfigAberta; render(); }
-function salvarChaveIA(){
-  const k=document.getElementById("iaKey"); if(k) IA.apiKey=k.value.trim();
-  const m=document.getElementById("iaModo"); if(m) IA.modo=m.value;
-  saveIA(); syncTextInputs(); Teacher.iaConfigAberta=false; Teacher.iaErro=""; toast("Configuração da IA salva!"); render();
-}
-function setModoIA(v){ IA.modo=v; saveIA(); }
+function setModoIA(v){ IA.modo=v; saveIaModo(); }
 
 // Chamada genérica à API do Groq (compatível com OpenAI). Retorna o texto; lança Error em falha.
 async function chamarIA(prompt){
@@ -1827,30 +2139,10 @@ async function saveLesson(){
   }
 }
 
-// --- ABA: progresso do aluno ---
+// --- ABA: rendimento das turmas (implementada na Fase C) ---
 function teacherProgressTab(){
-  const concl = SUBJECTS.reduce((a,s)=>a+PROFILE.disciplinas[s.id].licoesConcluidas.length,0);
-  let rows = SUBJECTS.map(s=>{
-    const d=PROFILE.disciplinas[s.id];
-    const total=(DATA[s.id]||[]).length;
-    const feitas=d.licoesConcluidas.filter(id=>(DATA[s.id]||[]).some(l=>l.id===id)).length;
-    const pct = total? Math.round(feitas/total*100):0;
-    return `<div class="card" style="cursor:default">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:22px">${s.icon}</span>
-        <div style="flex:1"><b>${esc(s.nome)}</b>
-          <div style="font-size:12px;color:var(--gray-d)">Nível ${d.nivel} • ${feitas}/${total} lições • ${d.xp} XP</div></div>
-        <b style="color:${s.cor}">${pct}%</b>
-      </div>
-      <div class="prog-bar-mini"><div style="width:${pct}%;background:${s.cor}"></div></div>
-    </div>`;
-  }).join("");
-  return `<div style="text-align:center;margin-bottom:6px">
-      <div style="font-size:18px;font-weight:800">${esc(PROFILE.nome)}</div>
-      <div style="color:#777;font-size:13px">🔥 ${PROFILE.streak} de ofensiva • ⭐ ${PROFILE.xpTotal} XP • ✅ ${concl} lições concluídas</div>
-    </div>
-    <div class="sec-title">Desempenho por disciplina</div>
-    ${rows}`;
+  return `<div class="empty"><div class="em">📊</div>
+    <p>O acompanhamento de rendimento por turma (ranking, gráficos e filtros)<br>será exibido aqui.</p></div>`;
 }
 
 /* ============================================================
@@ -1858,19 +2150,21 @@ function teacherProgressTab(){
    ============================================================ */
 window.App = {
   goHome, openSubject, openLesson, startExercises, selectOpt, onFillInput,
-  checkAnswer, nextExercise, continuarAposExplicacao, confirmQuit, openProfile, saveName, resetProgress, toggleSound,
+  checkAnswer, nextExercise, continuarAposExplicacao, confirmQuit, openProfile, resetProgress, toggleSound,
+  // autenticação
+  irTela, logout,
+  irCadastroAluno, submitLoginAluno, onNivelCadAluno, submitCadastroAluno,
+  irCadastroProf, submitLoginProf, toggleDiscCad, submitCadastroProf,
+  submitAdminSenha, salvarChaveOpenAI,
   // professor
-  openPwModal, closePwModal, checkPassword, teacherTab, teacherSelectSubj,
+  teacherTab, teacherSelectSubj,
   newLesson, editLesson, deleteLesson, addExercise, removeExercise, setExType,
   setExEnun, setExResp, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
   // IA
-  gerarExerciciosIA, toggleIaConfig, salvarChaveIA, setModoIA,
+  gerarExerciciosIA, toggleIaConfig, setModoIA,
   // sistema
   retryBoot: function(){ boot(); },
 };
-
-// Enter no campo de senha
-document.getElementById("pwInput").addEventListener("keydown",e=>{ if(e.key==="Enter") checkPassword(); });
 
 // ----- Telas globais de carregamento / erro -----
 function mostrarCarregando(msg){
@@ -1892,16 +2186,40 @@ function mostrarErroConexao(){
   </div>`;
 }
 
-// Boot — perfil/IA do localStorage; lições do Firestore
+// Restaura o usuário logado (aluno/professor) a partir da sessão local.
+async function restaurarSessao(){
+  if(!SESSAO){ State.tela="landing"; return; }
+  try{
+    if(SESSAO.tipo==="aluno"){
+      const doc = await db.collection("alunos").doc(SESSAO.id).get();
+      if(doc.exists){ const data=Object.assign({}, doc.data(), { id:doc.id }); delete data.criadoEm; definirAlunoLogado(data); State.tela="home"; return; }
+    } else if(SESSAO.tipo==="professor"){
+      const doc = await db.collection("professores").doc(SESSAO.id).get();
+      if(doc.exists){ PROFESSOR=Object.assign({}, doc.data(), { id:doc.id }); State.tela="teacher"; Teacher.tab="licoes"; return; }
+    }
+    // doc não existe mais → volta ao landing
+    SESSAO=null; salvarSessao(); State.tela="landing";
+  }catch(e){
+    // sem rede: tenta o cache local do aluno
+    if(SESSAO.tipo==="aluno"){
+      try{ const c=JSON.parse(localStorage.getItem(ALUNO_CACHE_KEY)||"null"); if(c && c.id===SESSAO.id){ definirAlunoLogado(c.doc); State.tela="home"; return; } }catch(_){}
+    }
+    State.tela="landing";
+  }
+}
+
+// Boot — IA/sessão do localStorage; lições/contas do Firestore
 async function boot(){
-  loadProfile();
   loadIA();
+  carregarSessao();
   SUBJECTS.forEach(s=> DATA[s.id]=DATA[s.id]||[]);
-  mostrarCarregando("Carregando lições...");
+  mostrarCarregando("Carregando...");
   try{
     initFirebase();
-    await ouvirLicoes(); // listener em tempo real; resolve no primeiro snapshot
-    State.tela="home"; render();
+    await carregarChaveIA();   // chave da OpenAI compartilhada (Firestore)
+    await ouvirLicoes();       // listener em tempo real; resolve no primeiro snapshot
+    await restaurarSessao();   // recarrega aluno/professor logado, se houver
+    render();
   }catch(e){
     mostrarErroConexao();
   }

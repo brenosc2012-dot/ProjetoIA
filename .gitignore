@@ -1,6 +1,10 @@
 # Arquivo temporário usado para validar a sintaxe do JS
 _check.js
 
+# Credenciais e configuração local — NUNCA comitar
+.env
+config.js
+
 # Sistema operacional
 Thumbs.db
 desktop.ini
