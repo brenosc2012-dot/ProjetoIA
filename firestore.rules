@@ -1,0 +1,37 @@
+rules_version = '2';
+// ============================================================
+// EstudaMais — Regras do Firestore (PONTO DE PARTIDA)
+// ------------------------------------------------------------
+// O app é client-only (sem backend) e usa autenticação por "hash simples"
+// dentro do próprio app — NÃO usa Firebase Authentication. Por isso estas
+// regras NÃO conseguem distinguir usuários de verdade: elas apenas liberam
+// o acesso necessário às coleções usadas pelo app.
+//
+// ⚠️ SEGURANÇA: com estas regras, qualquer pessoa com o endereço do projeto
+// pode ler/escrever os dados (inclusive a chave da OpenAI em "config" e os
+// dados dos alunos). Use somente em contexto fechado (turma/família). Para
+// um app público de verdade, migre para Firebase Authentication + regras
+// por usuário e mova a chave da IA para um proxy backend.
+//
+// Como aplicar: Firebase Console → Firestore → Regras → cole e publique.
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Lições e o cache de conteúdo gerado pela IA
+    match /licoes/{id}          { allow read, write: if true; }
+    match /licoes_geradas/{id}  { allow read, write: if true; }
+
+    // Contas (senha guardada como hash simples — barreira, não segurança real)
+    match /alunos/{id}          { allow read, write: if true; }
+    match /professores/{id}     { allow read, write: if true; }
+
+    // Progresso e premiações
+    match /progresso/{id}          { allow read, write: if true; }
+    match /premiacoes/{id}         { allow read, write: if true; }
+    match /premiacoes_alunos/{id}  { allow read, write: if true; }
+
+    // Configuração do app (inclui a chave da OpenAI cadastrada no painel Admin)
+    match /config/{id}          { allow read, write: if true; }
+  }
+}

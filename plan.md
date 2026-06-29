@@ -46,10 +46,31 @@ com facilidade — manualmente ou com geração automática de exercícios por I
 - [x] Rolagem correta do app-shell (altura fixa + `min-height:0` nos contêineres).
 
 ### Histórico de decisões
-- Provedor de IA evoluiu: Anthropic → Google Gemini → **Groq** (atual), por causa de
-  custo/cota gratuita.
+- Provedor de IA evoluiu: Anthropic → Google Gemini → Groq → **OpenAI gpt-4o-mini** (atual).
 - Recurso de exportar/importar backup `.json` foi **adicionado e depois removido** a
   pedido do usuário.
+
+## Versão 2.0 — Multiusuário (Concluído ✅)
+
+- [x] **Multi-faixa etária** (1º ano EF ao 3º ano EM); prompts da IA adaptados por
+      ano/nível/idade do aluno (ou da lição, na geração).
+- [x] **Contas de aluno e professor** (login/cadastro), senha com hash simples (SHA-256);
+      sessão local persistida; progresso do aluno na nuvem (sincroniza entre aparelhos).
+- [x] **Escopo de lições por turma/ano/nível** — aluno só vê as da sua turma/ano.
+- [x] **15 exercícios em 3 níveis** (5F/5I/5D), em ordem crescente; XP 10/20/30.
+- [x] **Painel de rendimento do professor** — ranking por XP, gráfico de barras CSS,
+      lista de alunos com % e acertos, filtros por turma/disciplina/período (coleção `progresso`).
+- [x] **Premiações** — medalhas automáticas + premiações personalizadas (CRUD do
+      professor, coleção `premiacoes`/`premiacoes_alunos`), troféus no perfil do aluno.
+- [x] **IA: OpenAI gpt-4o-mini**; chave compartilhada via Firestore (`config`), painel Admin.
+- [x] **Cache `licoes_geradas`** — resumo/exercícios reaproveitados entre dispositivos;
+      botão "Regenerar conteúdo com IA" no editor.
+- [x] Arquivos `.env.example`, `config.example.js`, `firestore.rules`; `.gitignore` ignora `.env`/`config.js`.
+
+### Riscos/limitações da v2.0
+- Auth por hash simples (sem Firebase Auth) + regras de Firestore abertas → dados
+  legíveis; chave da OpenAI (paga) exposta. Aceitável só em contexto fechado.
+- Senhas de barreira hardcoded: `ADMIN_PASSWORD` = `admin123`.
 
 ## Backlog / Possíveis próximos passos 🔭
 
