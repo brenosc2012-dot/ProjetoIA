@@ -1294,13 +1294,13 @@ function renderLessons(){
 
 // ----- Escopo de lições: o aluno só vê as da sua turma/ano/nível -----
 // Campos vazios na lição significam "todas" (ex.: conteúdo de exemplo).
-function licaoVisivel(l){
-  if(!ALUNO) return true;
-  const okTurma = !l.turma || l.turma===ALUNO.turma;
-  const okAno   = !l.ano   || l.ano===ALUNO.ano;
-  const okNivel = !l.nivel || l.nivel===ALUNO.nivel;
+function licaoVisivelPara(l, aluno){
+  const okTurma = !l.turma || l.turma===aluno.turma;
+  const okAno   = !l.ano   || l.ano===aluno.ano;
+  const okNivel = !l.nivel || l.nivel===aluno.nivel;
   return okTurma && okAno && okNivel;
 }
+function licaoVisivel(l){ return ALUNO ? licaoVisivelPara(l, ALUNO) : true; }
 function licoesDoAluno(subjId){ return (DATA[subjId]||[]).filter(licaoVisivel); }
 
 // ----- TELA DE ESTUDO (resumo gerado por IA, antes das atividades) -----
@@ -1698,7 +1698,21 @@ function finishLesson(){
   const perfeito = Sess.acertos===Sess.total;
   const r = concederRecompensa(State.subj, State.lesson, Sess.xpGanho);
   const novasMedalhas = verificarMedalhas({ perfeito:perfeito });
+  salvarProgresso(State.subj, State.lesson, Sess); // grava na coleção "progresso" (painel do professor)
   State.tela="done"; State._reward=r; State._medalhas=novasMedalhas; render();
+}
+
+// Grava o desempenho do aluno na lição (doc {alunoId}_{licaoId}) para o painel do professor.
+async function salvarProgresso(subjId, lessonId, sess){
+  if(!db || !ALUNO || !ALUNO.id || !lessonId) return;
+  try{
+    await db.collection("progresso").doc(ALUNO.id+"_"+lessonId).set({
+      alunoId: ALUNO.id, alunoNome: ALUNO.nome, licaoId: lessonId, disciplina: subjId,
+      turma: ALUNO.turma, ano: ALUNO.ano, nivel: ALUNO.nivel,
+      acertos: sess.acertos, erros: sess.erros, xpGanho: sess.xpGanho, total: sess.total,
+      concluido: true, concluidoEm: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge:true });
+  }catch(e){ /* best-effort */ }
 }
 
 // ----- CELEBRAÇÃO / CONCLUSÃO -----
@@ -1817,7 +1831,9 @@ function resetProgress(){
 /* ============================================================
    E) UI DO PROFESSOR
    ============================================================ */
-const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, iaErro:"", iaConfigAberta:false };
+const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, iaErro:"", iaConfigAberta:false,
+  // painel de rendimento (Fase C)
+  prog:{ carregada:false, carregando:false, erro:"", alunos:[], progresso:[], fTurma:"", fDisc:"", fPeriodo:"todos" } };
 
 function renderTeacher(){
   let inner;
@@ -1840,7 +1856,9 @@ function renderTeacher(){
 }
 function teacherTab(t){
   if(t!=="novo") Teacher.editingLesson=null;
-  Teacher.tab=t; render();
+  Teacher.tab=t;
+  if(t==="progresso" && !Teacher.prog.carregada && !Teacher.prog.carregando){ carregarRendimento(); return; }
+  render();
 }
 
 // --- ABA: listar lições (com seletor de disciplina) ---
@@ -2267,10 +2285,158 @@ async function saveLesson(){
   }
 }
 
-// --- ABA: rendimento das turmas (implementada na Fase C) ---
+// --- ABA: rendimento das turmas ---
+// Carrega alunos das turmas do professor e seus registros de progresso.
+async function carregarRendimento(){
+  Teacher.prog.carregando=true; Teacher.prog.erro=""; render();
+  try{
+    const turmas = (PROFESSOR && Array.isArray(PROFESSOR.turmas)) ? PROFESSOR.turmas : [];
+    let alunos=[];
+    if(turmas.length){
+      if(turmas.length<=10){
+        const snap = await db.collection("alunos").where("turma","in",turmas).get();
+        snap.forEach(d=> alunos.push(Object.assign({ id:d.id }, d.data())));
+      } else { // 'in' aceita no máximo 10 valores → carrega todos e filtra
+        const snap = await db.collection("alunos").get();
+        snap.forEach(d=>{ const a=d.data(); if(turmas.indexOf(a.turma)>=0) alunos.push(Object.assign({ id:d.id }, a)); });
+      }
+    }
+    const ids = {}; alunos.forEach(a=> ids[a.id]=true);
+    const progresso=[];
+    const snapP = await db.collection("progresso").get();
+    snapP.forEach(d=>{ const p=d.data(); if(ids[p.alunoId]) progresso.push(p); });
+    Teacher.prog.alunos=alunos; Teacher.prog.progresso=progresso;
+    Teacher.prog.carregada=true; Teacher.prog.carregando=false; render();
+  }catch(e){
+    Teacher.prog.carregando=false; Teacher.prog.carregada=true;
+    Teacher.prog.erro="Não foi possível carregar o rendimento. Verifique a conexão e as regras do Firestore.";
+    render();
+  }
+}
+function recarregarRendimento(){ Teacher.prog.carregada=false; carregarRendimento(); }
+function setProgTurma(v){ Teacher.prog.fTurma=v; render(); }
+function setProgDisc(v){ Teacher.prog.fDisc=v; render(); }
+function setProgPeriodo(v){ Teacher.prog.fPeriodo=v; render(); }
+
+function periodoLimiteSeg(p){
+  if(p==="7")  return Math.floor(Date.now()/1000) - 7*86400;
+  if(p==="30") return Math.floor(Date.now()/1000) - 30*86400;
+  return null;
+}
+// Aplica os filtros (turma/disciplina/período) e devolve alunos + progresso filtrados.
+function rendimentoFiltrado(){
+  const P=Teacher.prog, limite=periodoLimiteSeg(P.fPeriodo);
+  const alunos = P.alunos.filter(a=> !P.fTurma || a.turma===P.fTurma);
+  const idSet={}; alunos.forEach(a=> idSet[a.id]=true);
+  const prog = P.progresso.filter(p=>{
+    if(!idSet[p.alunoId]) return false;
+    if(P.fDisc && p.disciplina!==P.fDisc) return false;
+    if(limite && p.concluidoEm && p.concluidoEm.seconds && p.concluidoEm.seconds<limite) return false;
+    return true;
+  });
+  return { alunos, prog };
+}
+// Quantas lições estão disponíveis para um aluno (respeitando turma/ano), opcional por disciplina.
+function totalLicoesAluno(aluno, discId){
+  let n=0;
+  SUBJECTS.forEach(s=>{ if(discId && s.id!==discId) return; n += (DATA[s.id]||[]).filter(l=>licaoVisivelPara(l,aluno)).length; });
+  return n;
+}
+
 function teacherProgressTab(){
-  return `<div class="empty"><div class="em">📊</div>
-    <p>O acompanhamento de rendimento por turma (ranking, gráficos e filtros)<br>será exibido aqui.</p></div>`;
+  const P=Teacher.prog;
+  if(P.carregando) return `<div class="ia-loading" style="color:#9b59b6;padding:30px 0"><span class="ia-spinner"></span> Carregando rendimento...</div>`;
+  const turmas = (PROFESSOR && Array.isArray(PROFESSOR.turmas)) ? PROFESSOR.turmas : [];
+
+  const filtros = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px">
+        <label>Turma</label>
+        <select onchange="App.setProgTurma(this.value)">
+          <option value="">Todas</option>
+          ${turmas.map(t=>`<option value="${esc(t)}" ${P.fTurma===t?'selected':''}>Turma ${esc(t)}</option>`).join("")}
+        </select>
+      </div>
+      <div style="flex:1;min-width:120px">
+        <label>Disciplina</label>
+        <select onchange="App.setProgDisc(this.value)">
+          <option value="">Todas</option>
+          ${SUBJECTS.map(s=>`<option value="${s.id}" ${P.fDisc===s.id?'selected':''}>${s.icon} ${esc(s.nome)}</option>`).join("")}
+        </select>
+      </div>
+      <div style="flex:1;min-width:120px">
+        <label>Período</label>
+        <select onchange="App.setProgPeriodo(this.value)">
+          <option value="todos" ${P.fPeriodo==='todos'?'selected':''}>Todo o período</option>
+          <option value="7" ${P.fPeriodo==='7'?'selected':''}>Últimos 7 dias</option>
+          <option value="30" ${P.fPeriodo==='30'?'selected':''}>Últimos 30 dias</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn gray small" style="width:100%;margin:4px 0 6px" onclick="App.recarregarRendimento()">🔄 Atualizar dados</button>`;
+
+  if(P.erro) return filtros + `<div class="ia-erro">⚠️ ${esc(P.erro)}</div>`;
+  if(!P.alunos.length){
+    return filtros + `<div class="empty"><div class="em">👥</div><p>Nenhum aluno encontrado nas suas turmas (${turmas.map(esc).join(", ")||'—'}).<br>Os alunos aparecem aqui após se cadastrarem.</p></div>`;
+  }
+
+  const { alunos, prog } = rendimentoFiltrado();
+
+  // ----- Resumo -----
+  const totConcl = prog.length;
+  const comTotal = prog.filter(p=>p.total>0);
+  const mediaAcertos = comTotal.length ? Math.round(comTotal.reduce((a,p)=>a + (p.acertos/p.total*100),0)/comTotal.length) : 0;
+  const resumo = `<div class="stat-row" style="margin:10px 0 4px">
+    <div class="stat-pill" style="background:#ede7f6;color:#5e35b1"><div class="v">${alunos.length}</div><div class="l">Alunos</div></div>
+    <div class="stat-pill" style="background:#e3f2fd;color:#1565c0"><div class="v">${totConcl}</div><div class="l">Lições feitas</div></div>
+    <div class="stat-pill" style="background:#e8f5e9;color:#2e7d32"><div class="v">${mediaAcertos}%</div><div class="l">Média acertos</div></div>
+  </div>`;
+
+  // ----- Gráfico de barras: % de conclusão por disciplina (turma) -----
+  const discList = P.fDisc ? SUBJECTS.filter(s=>s.id===P.fDisc) : SUBJECTS;
+  let barras = discList.map(s=>{
+    let possiveis=0; alunos.forEach(a=> possiveis += (DATA[s.id]||[]).filter(l=>licaoVisivelPara(l,a)).length);
+    const feitas = prog.filter(p=>p.disciplina===s.id).length;
+    const pct = possiveis ? Math.round(feitas/possiveis*100) : 0;
+    if(possiveis===0) return "";
+    return `<div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span>${s.icon} ${esc(s.nome)}</span><b style="color:${s.cor}">${pct}%</b></div>
+      <div class="prog-bar-mini"><div style="width:${pct}%;background:${s.cor}"></div></div>
+    </div>`;
+  }).join("");
+  if(!barras.trim()) barras = `<p style="color:var(--gray-d);font-size:13px">Sem lições cadastradas para estas turmas ainda.</p>`;
+  const grafico = `<div class="sec-title">Conclusão por disciplina</div><div class="card" style="cursor:default">${barras}</div>`;
+
+  // ----- Ranking por XP -----
+  const rank = alunos.slice().sort((a,b)=> (b.xpTotal||0)-(a.xpTotal||0));
+  const medalha=["🥇","🥈","🥉"];
+  const ranking = `<div class="sec-title">🏆 Ranking por XP</div>` + rank.map((a,i)=>`
+    <div class="t-lesson-row">
+      <div style="width:30px;text-align:center;font-weight:800">${medalha[i]||(i+1)}</div>
+      <div class="info"><div class="t">${esc(a.nome)}</div><div class="d">Turma ${esc(a.turma||'-')} • ${esc(a.ano||'')}</div></div>
+      <b style="color:#9b59b6">⭐ ${a.xpTotal||0}</b>
+    </div>`).join("");
+
+  // ----- Lista de alunos: % concluído e média de acertos -----
+  const lista = `<div class="sec-title">Alunos (${alunos.length})</div>` + alunos.slice().sort((a,b)=>(a.nome||'').localeCompare(b.nome||'')).map(a=>{
+    const pAluno = prog.filter(p=>p.alunoId===a.id);
+    const possiveis = totalLicoesAluno(a, P.fDisc||null);
+    const feitas = pAluno.length;
+    const pct = possiveis ? Math.round(feitas/possiveis*100) : 0;
+    const ct = pAluno.filter(p=>p.total>0);
+    const acc = ct.length ? Math.round(ct.reduce((s,p)=>s+(p.acertos/p.total*100),0)/ct.length) : 0;
+    return `<div class="card" style="cursor:default">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="flex:1"><b>${esc(a.nome)}</b>
+          <div style="font-size:12px;color:var(--gray-d)">Turma ${esc(a.turma||'-')} • ⭐ ${a.xpTotal||0} XP • ${feitas}/${possiveis} lições • ✅ ${acc}% acertos</div></div>
+        <b style="color:#9b59b6">${pct}%</b>
+      </div>
+      <div class="prog-bar-mini"><div style="width:${pct}%;background:#9b59b6"></div></div>
+    </div>`;
+  }).join("");
+
+  return filtros + resumo + grafico + ranking + lista;
 }
 
 /* ============================================================
@@ -2288,6 +2454,8 @@ window.App = {
   teacherTab, teacherSelectSubj, onLessonNivel,
   newLesson, editLesson, deleteLesson, addExercise, removeExercise, setExType,
   setExEnun, setExResp, setExNivel, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
+  // rendimento (Fase C)
+  recarregarRendimento, setProgTurma, setProgDisc, setProgPeriodo,
   // IA
   gerarExerciciosIA, toggleIaConfig, setModoIA,
   // sistema
