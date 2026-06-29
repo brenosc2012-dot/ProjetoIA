@@ -864,7 +864,10 @@ const Fala = {
     if(!this.ok() || !texto) return;
     try{
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(String(texto).slice(0,4000));
+      // remove marcadores de markdown (* e #) para não serem lidos/atrapalharem
+      const limpo = String(texto).replace(/[*#]/g, "").replace(/[ \t]{2,}/g, " ").trim();
+      if(!limpo) return;
+      const u = new SpeechSynthesisUtterance(limpo.slice(0,4000));
       u.lang="pt-BR"; u.rate=0.95; u.pitch=1;
       window.speechSynthesis.speak(u);
     }catch(e){}
