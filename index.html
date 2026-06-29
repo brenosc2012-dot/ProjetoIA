@@ -2712,6 +2712,35 @@ async function carregarRendimento(){
   }
 }
 function recarregarRendimento(){ Teacher.prog.carregada=false; carregarRendimento(); }
+
+// --- Gestão de alunos (professor): redefinir senha / remover ---
+async function redefinirSenhaAluno(id){
+  const aluno=(Teacher.prog.alunos||[]).find(a=>a.id===id);
+  const nome = aluno ? aluno.nome : "o aluno";
+  const nova = prompt(`Nova senha para ${nome}:`);
+  if(nova===null) return; // cancelou
+  const s = String(nova).trim();
+  if(s.length<3){ toast("A senha deve ter ao menos 3 caracteres."); return; }
+  try{
+    const hash = await hashSenha(s);
+    await db.collection("alunos").doc(id).set({ senha:hash }, { merge:true });
+    toast("Senha redefinida! ✅");
+  }catch(e){ toast("Erro ao redefinir a senha. Verifique a conexão."); }
+}
+async function removerAluno(id){
+  const aluno=(Teacher.prog.alunos||[]).find(a=>a.id===id);
+  const nome = aluno ? aluno.nome : "este aluno";
+  if(!confirm(`Remover ${nome}? A conta e o histórico de progresso dele serão excluídos. Esta ação não pode ser desfeita.`)) return;
+  try{
+    // remove os registros de progresso do aluno (best-effort) e a conta
+    try{ const snap=await db.collection("progresso").where("alunoId","==",id).get(); await Promise.all(snap.docs.map(d=>d.ref.delete())); }catch(_){}
+    await db.collection("alunos").doc(id).delete();
+    Teacher.prog.alunos = (Teacher.prog.alunos||[]).filter(a=>a.id!==id);
+    Teacher.prog.progresso = (Teacher.prog.progresso||[]).filter(p=>p.alunoId!==id);
+    toast("Aluno removido.");
+    render();
+  }catch(e){ toast("Erro ao remover o aluno. Verifique a conexão."); }
+}
 function setProgTurma(v){ Teacher.prog.fTurma=v; render(); }
 function setProgDisc(v){ Teacher.prog.fDisc=v; render(); }
 function setProgPeriodo(v){ Teacher.prog.fPeriodo=v; render(); }
@@ -2831,6 +2860,10 @@ function teacherProgressTab(){
         <b style="color:#9b59b6">${pct}%</b>
       </div>
       <div class="prog-bar-mini"><div style="width:${pct}%;background:#9b59b6"></div></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn gray small" style="flex:1" onclick="App.redefinirSenhaAluno('${a.id}')">🔑 Redefinir senha</button>
+        <button class="btn red small" style="flex:1" onclick="App.removerAluno('${a.id}')">🗑️ Remover</button>
+      </div>
     </div>`;
   }).join("");
 
@@ -2995,6 +3028,8 @@ window.App = {
   previewLesson, fecharPreview,
   // rendimento (Fase C)
   recarregarRendimento, setProgTurma, setProgDisc, setProgPeriodo,
+  // gestão de alunos
+  redefinirSenhaAluno, removerAluno,
   // premiações (Fase D)
   setPremCriterio, criarPremiacao, excluirPremiacao,
   // conta do professor
