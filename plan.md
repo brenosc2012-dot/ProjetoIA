@@ -65,7 +65,7 @@ com facilidade — manualmente ou com geração automática de exercícios por I
 - [x] **IA: OpenAI gpt-4o-mini**; chave compartilhada via Firestore (`config`), painel Admin.
 - [x] **Cache `licoes_geradas`** — resumo/exercícios reaproveitados entre dispositivos;
       botão "Regenerar conteúdo com IA" no editor.
-- [x] Arquivos `.env.example`, `config.example.js`, `firestore.rules`; `.gitignore` ignora `.env`/`config.js`.
+- [x] Chave da OpenAI lida só do Firestore (`config/openai.apiKey`, painel Admin); `firestore.rules` no repo. (O mecanismo `config.js`/`.env` foi removido — gerava 404 no GitHub Pages.)
 
 ### Riscos/limitações da v2.0
 - Auth por hash simples (sem Firebase Auth) + regras de Firestore abertas → dados

@@ -312,10 +312,6 @@ label{ display:block; font-weight:700; font-size:14px; margin-bottom:6px; color:
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 
-<!-- Config opcional do cliente (config.js é ignorado pelo git; o app funciona sem ele).
-     Se existir, define window.CONFIG e sobrescreve a config padrão do Firebase. -->
-<script src="config.js" onerror="window.__semConfigJs=true"></script>
-
 <script>
 /* ============================================================
    ESTUDAMAIS — JavaScript
@@ -387,8 +383,8 @@ function descreverPublicoLicao(L){
 }
 
 // ----- Firebase / Firestore -----
-// Config pública por natureza; window.CONFIG (config.js) sobrescreve se existir.
-const firebaseConfig = (window.CONFIG && window.CONFIG.FIREBASE) ? window.CONFIG.FIREBASE : {
+// Config do Firebase é pública por natureza (a segurança vem das Regras do Firestore).
+const firebaseConfig = {
   apiKey: "AIzaSyDE5ikPdDSc0-olqnSlV1F1uKiOV-TCofk",
   authDomain: "estudamais-5cb1b.firebaseapp.com",
   projectId: "estudamais-5cb1b",
@@ -407,25 +403,28 @@ function initFirebase(){
 }
 
 // ----- Configuração da IA: OpenAI GPT-4o-mini -----
-// A chave é compartilhada via Firestore (coleção "config", doc "app"), cadastrada
-// no painel de Admin. config.js pode trazer uma chave de desenvolvimento local.
+// A chave é compartilhada via Firestore: coleção "config", documento "openai",
+// campo "apiKey", cadastrada pelo professor no painel de Admin. Carregada uma única
+// vez no boot (carregarChaveIA) e mantida em memória na variável global IA.apiKey.
 const IA_MODELO = "gpt-4o-mini";
 const IA_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-let IA = { apiKey:"", modo:"substituir" }; // modo: substituir | acumular
+let IA = { apiKey:"", modo:"substituir" }; // apiKey em memória; modo: substituir | acumular
 function loadIA(){
   // modo de geração é uma preferência local (não precisa ir à nuvem)
   try{ const m=localStorage.getItem(IA_MODO_KEY); if(m==="substituir"||m==="acumular") IA.modo=m; }catch(e){}
-  // chave de desenvolvimento opcional vinda do config.js
-  if(window.CONFIG && window.CONFIG.OPENAI_API_KEY) IA.apiKey = window.CONFIG.OPENAI_API_KEY;
 }
 function saveIaModo(){ try{ localStorage.setItem(IA_MODO_KEY, IA.modo); }catch(e){} }
 
-// Lê a chave da OpenAI salva no Firestore (config/app). Best-effort.
+// Lê a chave da OpenAI do Firestore (config/openai.apiKey) e guarda em IA.apiKey.
+// Best-effort: sem rede/permissão, segue sem chave (cai no fallback nas telas).
 async function carregarChaveIA(){
   if(!db) return;
   try{
-    const doc = await db.collection("config").doc("app").get();
-    if(doc.exists){ const d=doc.data()||{}; if(d.openaiApiKey) IA.apiKey = d.openaiApiKey; }
+    const doc = await db.collection("config").doc("openai").get();
+    if(doc.exists){ const d=doc.data()||{}; if(d.apiKey){ IA.apiKey = String(d.apiKey).trim(); return; } }
+    // compatibilidade com a versão anterior (config/app.openaiApiKey)
+    const legado = await db.collection("config").doc("app").get();
+    if(legado.exists){ const d=legado.data()||{}; if(d.openaiApiKey) IA.apiKey = String(d.openaiApiKey).trim(); }
   }catch(e){ /* sem permissão/rede: segue sem chave compartilhada */ }
 }
 
@@ -1262,7 +1261,7 @@ function renderAdmin(){
     <h2 style="margin:10px 0 16px">⚙️ Configuração da IA</h2>
     ${authErroHtml()}
     <div class="ia-panel">
-      <p style="font-size:13px;color:#555;margin-bottom:8px">Modelo: <b>${IA_MODELO}</b> (OpenAI). A chave é salva no Firestore (coleção <code>config</code>) e usada por todos os dispositivos.</p>
+      <p style="font-size:13px;color:#555;margin-bottom:8px">Modelo: <b>${IA_MODELO}</b> (OpenAI). A chave é salva no Firestore (<code>config/openai</code>, campo <code>apiKey</code>) e usada por todos os dispositivos.</p>
       <p style="font-size:12px;color:#c0392b;margin-bottom:10px">⚠️ A chave fica legível por quem acessar o Firestore. Não use uma chave sem limite de gastos.</p>
       <label>OpenAI API Key</label>
       <input id="admKey" type="password" value="${esc(IA.apiKey||'')}" placeholder="sk-..." autocomplete="off">
@@ -1281,7 +1280,7 @@ async function salvarChaveOpenAI(){
   const k=val('admKey').trim();
   State.authBusy=true; State.authErro=""; render();
   try{
-    await db.collection("config").doc("app").set({ openaiApiKey:k, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
+    await db.collection("config").doc("openai").set({ apiKey:k, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
     IA.apiKey=k; State.authBusy=false; toast("Chave salva no Firestore! ✅"); render();
   }catch(e){ State.authBusy=false; State.authErro="Erro ao salvar a chave (verifique as regras do Firestore)."; render(); }
 }
