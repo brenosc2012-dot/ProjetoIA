@@ -2014,13 +2014,16 @@ const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, r
   // painel de rendimento (Fase C)
   prog:{ carregada:false, carregando:false, erro:"", alunos:[], progresso:[], fTurma:"", fDisc:"", fPeriodo:"todos" },
   // premiações personalizadas (Fase D)
-  prem:{ carregada:false, carregando:false, erro:"", lista:[], salvando:false, form:null } };
+  prem:{ carregada:false, carregando:false, erro:"", lista:[], salvando:false, form:null },
+  // edição da própria conta (turmas/disciplinas)
+  conta:{ turmas:[], disc:[], salvando:false } };
 
 function renderTeacher(){
   let inner;
   if(Teacher.tab==="licoes") inner=teacherLessonsTab();
   else if(Teacher.tab==="novo") inner=teacherEditorTab();
   else if(Teacher.tab==="premios") inner=teacherPremiosTab();
+  else if(Teacher.tab==="conta") inner=teacherContaTab();
   else inner=teacherProgressTab();
 
   app.innerHTML = `<div class="screen active">
@@ -2031,8 +2034,9 @@ function renderTeacher(){
     <div class="teacher-tabs">
       <button class="teacher-tab ${Teacher.tab==='licoes'?'active':''}" onclick="App.teacherTab('licoes')">📋 Lições</button>
       <button class="teacher-tab ${Teacher.tab==='novo'?'active':''}" onclick="App.teacherTab('novo')">${Teacher.editingLesson?'✏️ Editar':'➕ Nova'}</button>
-      <button class="teacher-tab ${Teacher.tab==='progresso'?'active':''}" onclick="App.teacherTab('progresso')">📊 Rendimento</button>
+      <button class="teacher-tab ${Teacher.tab==='progresso'?'active':''}" onclick="App.teacherTab('progresso')">📊 Rendi.</button>
       <button class="teacher-tab ${Teacher.tab==='premios'?'active':''}" onclick="App.teacherTab('premios')">🏆 Prêmios</button>
+      <button class="teacher-tab ${Teacher.tab==='conta'?'active':''}" onclick="App.teacherTab('conta')">👤 Conta</button>
     </div>
     <div class="content" style="background:#faf7ff">${inner}</div>
   </div>`;
@@ -2042,6 +2046,11 @@ function teacherTab(t){
   Teacher.tab=t;
   if(t==="progresso" && !Teacher.prog.carregada && !Teacher.prog.carregando){ carregarRendimento(); return; }
   if(t==="premios" && !Teacher.prem.carregada && !Teacher.prem.carregando){ carregarPremiacoesProf(); return; }
+  if(t==="conta"){ // carrega os valores atuais da conta para edição
+    Teacher.conta.turmas = (PROFESSOR && Array.isArray(PROFESSOR.turmas)) ? PROFESSOR.turmas.slice() : [];
+    Teacher.conta.disc   = (PROFESSOR && Array.isArray(PROFESSOR.disciplinas)) ? PROFESSOR.disciplinas.slice() : [];
+    Teacher.conta.salvando=false;
+  }
   render();
 }
 
@@ -2755,6 +2764,47 @@ function teacherPremiosTab(){
   return form + `<div class="sec-title">Premiações criadas</div>` + lista;
 }
 
+// --- ABA: minha conta (editar turmas/disciplinas da conta existente) ---
+function teacherContaTab(){
+  const C=Teacher.conta;
+  const turmaChips = `<div style="display:flex;flex-wrap:wrap">` + TURMAS_LETRAS.map(t=>{
+    const on=C.turmas.indexOf(t)>=0;
+    return `<button type="button" class="btn small ${on?'':'gray'}" style="width:auto;min-width:64px;margin:0 8px 8px 0" onclick="App.toggleContaTurma('${t}')">${on?'✓ ':''}Turma ${t}</button>`;
+  }).join("") + `</div>`;
+  const discChips = SUBJECTS.map(s=>{
+    const on=C.disc.indexOf(s.id)>=0;
+    return `<button type="button" class="opt" style="margin-bottom:8px;${on?'border-color:var(--blue);background:#ddf4ff;color:#1899d6':''}" onclick="App.toggleContaDisc('${s.id}')">
+      <span>${s.icon} ${esc(s.nome)}</span><span style="margin-left:auto">${on?'✓':''}</span></button>`;
+  }).join("");
+  const btn = C.salvando
+    ? `<button class="btn" disabled><span class="ia-spinner" style="width:18px;height:18px;border-color:rgba(255,255,255,.4);border-top-color:#fff;vertical-align:middle"></span> Salvando...</button>`
+    : `<button class="btn" onclick="App.salvarConta()">💾 Salvar alterações</button>`;
+  return `<div style="text-align:center;margin-bottom:6px">
+      <div style="font-size:18px;font-weight:800">${esc((PROFESSOR&&PROFESSOR.nome)||'')}</div>
+      <div style="color:#777;font-size:13px">${esc((PROFESSOR&&PROFESSOR.email)||'')}</div>
+    </div>
+    <div class="sec-title">Turmas que leciona</div>
+    ${turmaChips}
+    <div class="sec-title">Disciplinas que leciona</div>
+    ${discChips}
+    ${btn}
+    <p style="font-size:12px;color:#999;margin-top:8px">As turmas definidas aqui aparecem ao criar lições (campo "Turma") e no painel de rendimento. Use o mesmo formato de letra que os alunos (A, B, C…).</p>`;
+}
+function toggleContaTurma(t){ const a=Teacher.conta.turmas; const i=a.indexOf(t); if(i>=0)a.splice(i,1); else a.push(t); render(); }
+function toggleContaDisc(id){ const a=Teacher.conta.disc; const i=a.indexOf(id); if(i>=0)a.splice(i,1); else a.push(id); render(); }
+async function salvarConta(){
+  const turmas=Teacher.conta.turmas.slice().sort(), disciplinas=Teacher.conta.disc.slice();
+  if(!turmas.length){ toast("Selecione ao menos uma turma."); return; }
+  if(!disciplinas.length){ toast("Selecione ao menos uma disciplina."); return; }
+  if(!PROFESSOR || !PROFESSOR.id){ toast("Sessão inválida. Entre novamente."); return; }
+  Teacher.conta.salvando=true; render();
+  try{
+    await db.collection("professores").doc(PROFESSOR.id).set({ turmas, disciplinas }, { merge:true });
+    PROFESSOR.turmas=turmas; PROFESSOR.disciplinas=disciplinas;
+    Teacher.conta.salvando=false; toast("Conta atualizada! ✅"); render();
+  }catch(e){ Teacher.conta.salvando=false; toast("Erro ao salvar. Verifique a conexão."); render(); }
+}
+
 /* ============================================================
    F) INICIALIZAÇÃO + API pública (App.*)
    ============================================================ */
@@ -2775,6 +2825,8 @@ window.App = {
   recarregarRendimento, setProgTurma, setProgDisc, setProgPeriodo,
   // premiações (Fase D)
   setPremCriterio, criarPremiacao, excluirPremiacao,
+  // conta do professor
+  toggleContaTurma, toggleContaDisc, salvarConta,
   // IA
   gerarExerciciosIA, toggleIaConfig, setModoIA, regenerarConteudoIA,
   // sistema
