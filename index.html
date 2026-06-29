@@ -1354,6 +1354,31 @@ function licaoVisivelPara(l, aluno){
 function licaoVisivel(l){ return ALUNO ? licaoVisivelPara(l, ALUNO) : true; }
 function licoesDoAluno(subjId){ return (DATA[subjId]||[]).filter(licaoVisivel); }
 
+// ----- Cache compartilhado de conteúdo gerado por IA (coleção "licoes_geradas") -----
+// Guarda { licaoId, resumo, exercicios, geradoEm, geradoPor } para reuso entre dispositivos.
+function deviceId(){
+  let id=null; try{ id=localStorage.getItem("estudamais_device"); }catch(e){}
+  if(!id){ id="dev"+Math.random().toString(36).slice(2,10); try{ localStorage.setItem("estudamais_device", id); }catch(e){} }
+  return id;
+}
+async function getLicaoGerada(licaoId){
+  if(!db || !licaoId) return null;
+  try{ const d=await db.collection("licoes_geradas").doc(licaoId).get(); return d.exists ? d.data() : null; }
+  catch(e){ return null; }
+}
+function salvarLicaoGerada(licaoId, dados){
+  if(!db || !licaoId) return;
+  try{
+    db.collection("licoes_geradas").doc(licaoId).set(Object.assign({
+      licaoId, geradoEm: firebase.firestore.FieldValue.serverTimestamp(), geradoPor: deviceId()
+    }, dados), { merge:true });
+  }catch(e){ /* best-effort */ }
+}
+function limparLicaoGerada(licaoId){
+  if(!db || !licaoId) return;
+  try{ db.collection("licoes_geradas").doc(licaoId).delete(); }catch(e){}
+}
+
 // ----- TELA DE ESTUDO (resumo gerado por IA, antes das atividades) -----
 function getLesson(){ return (DATA[State.subj]||[]).find(l=>l.id===State.lesson); }
 
@@ -1367,18 +1392,31 @@ async function openLesson(lid){
   // para que qualquer dispositivo já encontre a explicação pronta no Firestore
   if(IA.apiKey.trim()) pregerarExplicacoes(l);
 
-  // 1) resumo já salvo no Firestore (gerado antes, por qualquer dispositivo) → usa direto, sem IA
+  // 1) cache em memória desta sessão
+  if(resumoCache[lid]){ State.estudo={ status:"ok", texto:resumoCache[lid] }; render(); return; }
+
+  // mostra a tela de carregamento enquanto consultamos o cache na nuvem
+  State.estudo={ status:"loading" }; render();
+  const ativo=()=> State.tela==="study" && State.lesson===lid;
+
+  // 2) cache compartilhado no Firestore (licoes_geradas) → reaproveita sem chamar a IA
+  const cache = await getLicaoGerada(lid);
+  if(cache && cache.resumo && String(cache.resumo).trim()){
+    resumoCache[lid]=cache.resumo;
+    if(ativo()){ State.estudo={ status:"ok", texto:cache.resumo }; render(); }
+    return;
+  }
+  // 2b) legado: resumo salvo no próprio doc da lição → usa e migra para o novo cache
   if(l.resumoIA && l.resumoIA.trim()){
     resumoCache[lid]=l.resumoIA;
-    State.estudo={ status:"ok", texto:l.resumoIA }; render(); return;
+    salvarLicaoGerada(lid, { resumo:l.resumoIA, exercicios:l.exercicios });
+    if(ativo()){ State.estudo={ status:"ok", texto:l.resumoIA }; render(); }
+    return;
   }
-  // 2) cache em memória desta sessão
-  if(resumoCache[lid]){ State.estudo={ status:"ok", texto:resumoCache[lid] }; render(); return; }
-  // 3) sem chave configurada neste aparelho → usa o conteúdo original do professor
-  if(!IA.apiKey.trim()){ State.estudo={ status:"fallback", texto:l.texto }; render(); return; }
+  // 3) sem chave neste aparelho → usa o conteúdo original do professor
+  if(!IA.apiKey.trim()){ if(ativo()){ State.estudo={ status:"fallback", texto:l.texto }; render(); } return; }
 
-  // 4) gera o resumo pela IA e salva no Firestore para os outros dispositivos
-  State.estudo={ status:"loading" }; render();
+  // 4) gera o resumo pela IA e salva no cache compartilhado (licoes_geradas)
   const pub = descreverPublico(ALUNO);
   const prompt =
 `Você é um professor do ${pub.ano} do ${pub.nivel}.
@@ -1395,12 +1433,10 @@ Conteúdo da lição: ${l.texto}`;
     const texto = await chamarIA(prompt);
     if(!texto.trim()) throw new Error("vazio");
     resumoCache[lid]=texto;
-    l.resumoIA=texto;
-    // persiste no Firestore (best-effort; não bloqueia a tela)
-    try{ db.collection("licoes").doc(lid).set({ resumoIA:texto }, { merge:true }); }catch(_){}
-    if(State.tela==="study" && State.lesson===lid){ State.estudo={ status:"ok", texto }; render(); }
+    salvarLicaoGerada(lid, { resumo:texto, exercicios:l.exercicios });
+    if(ativo()){ State.estudo={ status:"ok", texto }; render(); }
   }catch(e){
-    if(State.tela==="study" && State.lesson===lid){ State.estudo={ status:"fallback", texto:l.texto }; render(); }
+    if(ativo()){ State.estudo={ status:"fallback", texto:l.texto }; render(); }
   }
 }
 
@@ -1907,7 +1943,7 @@ function resetProgress(){
 /* ============================================================
    E) UI DO PROFESSOR
    ============================================================ */
-const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, iaErro:"", iaConfigAberta:false,
+const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, regenerando:false, iaErro:"", iaConfigAberta:false,
   // painel de rendimento (Fase C)
   prog:{ carregada:false, carregando:false, erro:"", alunos:[], progresso:[], fTurma:"", fDisc:"", fPeriodo:"todos" },
   // premiações personalizadas (Fase D)
@@ -1973,7 +2009,7 @@ function escopoLicaoLabel(l){
 }
 function teacherSelectSubj(v){ Teacher.subj=v; render(); }
 
-function resetIaEstado(){ Teacher.gerando=false; Teacher.iaErro=""; Teacher.iaConfigAberta=false; }
+function resetIaEstado(){ Teacher.gerando=false; Teacher.regenerando=false; Teacher.iaErro=""; Teacher.iaConfigAberta=false; }
 function newLesson(){ Teacher.editingLesson={ id:null, titulo:"", texto:"", exercicios:[], turma:"", nivel:"", ano:"" }; resetIaEstado(); Teacher.tab="novo"; render(); }
 function editLesson(id){
   const l=(DATA[Teacher.subj]||[]).find(x=>x.id===id);
@@ -2041,9 +2077,9 @@ function iaPanel(L){
   const temChave = (IA.apiKey||"").trim().length>0;
 
   // estado de carregamento
-  if(Teacher.gerando){
+  if(Teacher.gerando || Teacher.regenerando){
     return `<div class="ia-panel">
-      <div class="ia-loading"><span class="ia-spinner"></span> Gerando 15 exercícios com IA...</div>
+      <div class="ia-loading"><span class="ia-spinner"></span> ${Teacher.regenerando?'Regenerando conteúdo':'Gerando 15 exercícios'} com IA...</div>
       <p style="font-size:12px;color:#777;text-align:center;margin-top:6px">Isso pode levar alguns segundos.</p>
     </div>`;
   }
@@ -2071,12 +2107,53 @@ function iaPanel(L){
     <button class="btn" style="background:#9b59b6;box-shadow:0 4px 0 #7d3c98;margin-top:4px" ${(!temTexto||!temChave)?'disabled':''} onclick="App.gerarExerciciosIA()">
       ✨ Gerar 15 Exercícios com IA
     </button>
+    ${L.id ? `<button class="btn gray small" style="width:100%;margin-top:8px" ${!temChave?'disabled':''} onclick="App.regenerarConteudoIA()">
+      🔄 Regenerar conteúdo com IA (resumo compartilhado)
+    </button>
+    <p style="font-size:11px;color:#999;margin-top:4px">Recria o resumo de estudo e atualiza o cache (licoes_geradas) para todos os dispositivos.</p>` : ''}
     ${!temChave ? `<p style="font-size:12px;color:#c0392b;text-align:center;margin-top:6px">Chave da IA não configurada. Peça ao Administrador para cadastrá-la (⚙️ na tela inicial).</p>`
       : (!temTexto ? `<p style="font-size:12px;color:#c0392b;text-align:center;margin-top:6px">Escreva o conteúdo da lição primeiro.</p>`:'')}
   </div>`;
 }
 function toggleIaConfig(){ syncTextInputs(); Teacher.iaConfigAberta=!Teacher.iaConfigAberta; render(); }
 function setModoIA(v){ IA.modo=v; saveIaModo(); }
+
+// Força a regeneração do resumo de estudo e atualiza o cache compartilhado (licoes_geradas).
+async function regenerarConteudoIA(){
+  syncTextInputs();
+  const L=Teacher.editingLesson;
+  if(!L || !L.id){ toast("Salve a lição primeiro para gerar o conteúdo compartilhado."); return; }
+  const conteudo=(L.texto||"").trim();
+  if(!conteudo){ Teacher.iaErro="Escreva o conteúdo da lição antes de gerar."; render(); return; }
+  if(!IA.apiKey.trim()){ Teacher.iaErro="Chave da IA não configurada (peça ao Administrador)."; render(); return; }
+  if(!confirm("Regenerar o resumo de estudo desta lição com IA? Isso substitui o resumo em cache para todos os dispositivos.")) return;
+  Teacher.regenerando=true; Teacher.iaErro=""; render();
+  const pub=descreverPublicoLicao(L);
+  const prompt =
+`Você é um professor do ${pub.ano} do ${nomeNivel(pub.nivelId)}.
+Com base no conteúdo abaixo, crie um resumo didático e detalhado para o aluno estudar antes de responder exercícios.
+O resumo deve:
+- Ter linguagem clara e animada
+- Usar exemplos do cotidiano adequados à faixa etária
+- Destacar os pontos mais importantes em tópicos
+- Ter no máximo 300 palavras
+- Incluir uma dica de memorização no final
+${pub.frase}
+Conteúdo da lição: ${conteudo}`;
+  try{
+    const texto=await chamarIA(prompt);
+    if(!texto.trim()) throw new Error("A IA retornou um resumo vazio. Tente novamente.");
+    delete resumoCache[L.id];
+    salvarLicaoGerada(L.id, { resumo:texto, exercicios:L.exercicios });
+    Teacher.regenerando=false; render();
+    toast("Resumo regenerado e salvo no cache! ✅");
+  }catch(err){
+    Teacher.regenerando=false;
+    let msg=err&&err.message?err.message:"Falha ao contatar a IA.";
+    if(/Failed to fetch|NetworkError/i.test(msg)) msg="Não foi possível conectar. Verifique a internet e a chave.";
+    Teacher.iaErro=msg; render();
+  }
+}
 
 // Chamada genérica à API do Groq (compatível com OpenAI). Retorna o texto; lança Error em falha.
 async function chamarIA(prompt){
@@ -2351,8 +2428,9 @@ async function saveLesson(){
       const ref = await db.collection("licoes").add(payload);
       L.id = ref.id;
     }
-    // limpa o cache em memória do resumo desta lição (foi invalidado)
+    // limpa o cache (memória + nuvem) do conteúdo gerado — o material pode ter mudado
     delete resumoCache[L.id];
+    if(L.id) limparLicaoGerada(L.id);
     // atualiza o estado local (remove de onde estava e re-adiciona na disciplina atual)
     removeLicaoLocal(L.id);
     if(!DATA[disc]) DATA[disc]=[];
@@ -2630,7 +2708,7 @@ window.App = {
   // premiações (Fase D)
   setPremCriterio, criarPremiacao, excluirPremiacao,
   // IA
-  gerarExerciciosIA, toggleIaConfig, setModoIA,
+  gerarExerciciosIA, toggleIaConfig, setModoIA, regenerarConteudoIA,
   // sistema
   retryBoot: function(){ boot(); },
 };
