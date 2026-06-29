@@ -2115,9 +2115,11 @@ function teacherEditorTab(){
   let exs = L.exercicios.map((ex,i)=>exEditorCard(ex,i)).join("");
   if(L.exercicios.length===0) exs=`<p style="color:var(--gray-d);text-align:center;padding:10px">Nenhum exercício ainda. Adicione abaixo 👇</p>`;
 
-  const profTurmas = (PROFESSOR && Array.isArray(PROFESSOR.turmas)) ? PROFESSOR.turmas.slice() : [];
-  if(L.turma && profTurmas.indexOf(L.turma)<0) profTurmas.push(L.turma);
-  const turmaOpts = `<option value="">Todas as turmas</option>` + profTurmas.map(t=>`<option value="${esc(t)}" ${L.turma===t?'selected':''}>Turma ${esc(t)}</option>`).join("");
+  // sempre oferece as letras padrão A–F (+ turmas da conta e a turma atual da lição)
+  const opcoesTurma = TURMAS_LETRAS.slice();
+  ((PROFESSOR && PROFESSOR.turmas) || []).forEach(t=>{ if(opcoesTurma.indexOf(t)<0) opcoesTurma.push(t); });
+  if(L.turma && opcoesTurma.indexOf(L.turma)<0) opcoesTurma.push(L.turma);
+  const turmaOpts = `<option value="">Todas as turmas</option>` + opcoesTurma.map(t=>`<option value="${esc(t)}" ${L.turma===t?'selected':''}>Turma ${esc(t)}</option>`).join("");
   const nivelOpts = `<option value="">Todos os níveis</option>` + NIVEIS_ENSINO.map(n=>`<option value="${n.id}" ${L.nivel===n.id?'selected':''}>${esc(n.nome)}</option>`).join("");
   const anoOpts = `<option value="">Todos os anos</option>` + (L.nivel?nivelById(L.nivel).anos:[]).map(a=>`<option value="${esc(a)}" ${L.ano===a?'selected':''}>${esc(a)}</option>`).join("");
 
