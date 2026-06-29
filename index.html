@@ -840,6 +840,45 @@ const Sound = {
   click(){ this.play([[440,0,.05,"sine",.12]]); }
 };
 
+// Módulo de LEITURA EM VOZ ALTA (TTS) — Web Speech API, sem arquivos, offline.
+const Fala = {
+  ok(){ return typeof window!=="undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance!=="undefined"; },
+  ler(texto){
+    if(!this.ok() || !texto) return;
+    try{
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(String(texto).slice(0,4000));
+      u.lang="pt-BR"; u.rate=0.95; u.pitch=1;
+      window.speechSynthesis.speak(u);
+    }catch(e){}
+  },
+  parar(){ if(this.ok()){ try{ window.speechSynthesis.cancel(); }catch(e){} } },
+  falando(){ try{ return this.ok() && window.speechSynthesis.speaking; }catch(e){ return false; } }
+};
+// Botão reutilizável de "ouvir" (só aparece se o navegador suporta TTS).
+function botaoFala(handler, rotulo){
+  if(!Fala.ok()) return "";
+  return `<button class="btn gray small" style="width:auto" onclick="App.${handler}()">🔊 ${esc(rotulo||'Ouvir')}</button>`;
+}
+function toggleLeitura(texto){ if(Fala.falando()) Fala.parar(); else Fala.ler(texto); }
+function lerResumo(){ toggleLeitura((State.estudo && State.estudo.texto) || ""); }
+function lerQuestao(){
+  const ex = Sess && Sess.exercicios && Sess.exercicios[Sess.idx];
+  if(!ex) return;
+  let t = ex.enunciado || "";
+  if(ex.tipo!=="fill" && Array.isArray(ex.opcoes)){
+    t += ". Opções: " + ex.opcoes.map((o,i)=>{
+      const letra = ex.tipo==="vf" ? (i===0?'Verdadeiro':'Falso') : (String.fromCharCode(65+i)+", "+o);
+      return ex.tipo==="vf" ? letra : letra;
+    }).join("; ");
+  }
+  toggleLeitura(t);
+}
+function lerExplicacao(){
+  const e = State.explic || {};
+  toggleLeitura((e.respCorreta ? ("Resposta certa: "+e.respCorreta+". ") : "") + (e.texto||""));
+}
+
 // Mascote em SVG — "Estrelinha", uma estrela alegre (distinta da coruja do Duolingo)
 function mascot(cls){
   return `<svg class="mascot ${cls||''}" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -1003,6 +1042,7 @@ let resumoCache = {};
 let estudoTimer = null;
 
 function render(){
+  Fala.parar(); // interrompe leitura em voz alta ao trocar/recriar a tela
   switch(State.tela){
     case "landing":      renderLanding(); break;
     case "loginAluno":   renderLoginAluno(); break;
@@ -1540,6 +1580,7 @@ function renderStudy(){
       <div style="text-align:center;margin-bottom:6px">${mascot('')}</div>
       <h1 style="text-align:center;font-size:22px;color:${s.cor};margin-bottom:6px">Vamos estudar antes de responder! 📚</h1>
       ${est.status==="fallback" ? `<p style="text-align:center;font-size:12px;color:#999;margin-bottom:8px">(Resumo automático indisponível — veja o conteúdo da lição abaixo.)</p>`:''}
+      <div style="text-align:center;margin-bottom:10px">${botaoFala('lerResumo','Ouvir o resumo')}</div>
       <div class="resumo-box">${corpo}</div>
     </div>
     <div style="padding:16px;border-top:2px solid var(--gray);background:#fff">
@@ -1660,6 +1701,7 @@ function renderExercise(){
         ${ex.nivel?`<span class="pill-tag" style="background:${nivelDificuldadeCor(ex.nivel)}">${nivelDificuldadeLabel(ex.nivel)} • +${xpDaQuestao(ex)} XP</span>`:''}
       </div>
       <div class="q-prompt">${esc(ex.enunciado)}</div>
+      ${Fala.ok()?`<div style="margin:-4px 0 12px">${botaoFala('lerQuestao','Ouvir a pergunta')}</div>`:''}
       <div id="optWrap">${body}</div>
     </div>
     ${footer}
@@ -1845,6 +1887,7 @@ function renderExplain(){
       <h1 style="text-align:center;color:#b8860b;font-size:23px;margin:8px 0 14px">Quase lá! Veja a explicação 💡</h1>
       <div class="explic-resp">✅ Resposta certa: <b>${esc(e.respCorreta)}</b></div>
       <div class="resumo-box" style="font-size:17px">${formatResumo(e.texto)}</div>
+      <div style="text-align:center;margin-top:12px">${botaoFala('lerExplicacao','Ouvir a explicação')}</div>
     </div>
     <div style="padding:16px;border-top:2px solid var(--gray);background:#fff">
       <button class="btn" onclick="App.continuarAposExplicacao()">✅ ${btnLabel}</button>
@@ -2938,6 +2981,8 @@ window.App = {
   goHome, openSubject, openLesson, startExercises, selectOpt, onFillInput,
   checkAnswer, nextExercise, continuarAposExplicacao, confirmQuit, openProfile, resetProgress, toggleSound,
   onPerfilNivel, salvarDadosEscolares,
+  // leitura em voz alta (TTS)
+  lerResumo, lerQuestao, lerExplicacao,
   // autenticação
   irTela, logout, toggleSenha,
   irCadastroAluno, submitLoginAluno, onNivelCadAluno, submitCadastroAluno,
