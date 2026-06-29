@@ -1041,6 +1041,18 @@ function authShell(corpo, voltarTela){
 }
 function authErroHtml(){ return State.authErro ? `<div class="ia-erro">⚠️ ${esc(State.authErro)}</div>` : ""; }
 function authBusyBtn(label){ return State.authBusy ? `<button class="btn" disabled><span class="ia-spinner" style="width:18px;height:18px;border-color:rgba(255,255,255,.4);border-top-color:#fff;vertical-align:middle"></span> Aguarde...</button>` : label; }
+// Campo de senha com botão 👁️ para mostrar/ocultar (reduz erro de digitação).
+function inputSenha(id, ph, value){
+  return `<div style="position:relative">
+    <input id="${id}" type="password" value="${esc(value||'')}" placeholder="${esc(ph||'Senha')}" autocomplete="off" style="padding-right:48px">
+    <button type="button" onclick="App.toggleSenha('${id}',this)" aria-label="Mostrar senha" style="position:absolute;right:8px;top:7px;border:none;background:none;font-size:20px;cursor:pointer;line-height:1;padding:4px">👁️</button>
+  </div>`;
+}
+function toggleSenha(id, btn){
+  const el=document.getElementById(id); if(!el) return;
+  if(el.type==="password"){ el.type="text"; if(btn) btn.textContent="🙈"; }
+  else { el.type="password"; if(btn) btn.textContent="👁️"; }
+}
 
 // ----- LANDING: escolha de perfil -----
 function renderLanding(){
@@ -1062,23 +1074,35 @@ function renderLoginAluno(){
     <label>Nome completo</label>
     <input id="laNome" placeholder="Seu nome completo" autocomplete="off">
     <label>Senha</label>
-    <input id="laSenha" type="password" placeholder="Sua senha" autocomplete="off">
+    ${inputSenha('laSenha','Sua senha')}
     ${authBusyBtn(`<button class="btn" onclick="App.submitLoginAluno()">Entrar</button>`)}
     <button class="btn gray" style="margin-top:12px" onclick="App.irCadastroAluno()">Ainda não tenho conta — Cadastrar</button>
   `, "landing");
 }
 function irCadastroAluno(){ Form={ nivel:"fund1", ano:"" }; State.authErro=""; State.tela="cadastroAluno"; render(); }
+// Busca alunos por nome de forma tolerante (ignora maiúsculas/acentos/espaços).
+async function buscarAlunosPorNome(nomeInput){
+  const alvo = norm(nomeInput);
+  let snap = await db.collection("alunos").where("nomeNorm","==",alvo).get();       // contas novas/migradas
+  if(!snap.empty) return snap.docs;
+  snap = await db.collection("alunos").where("nome","==",(nomeInput||"").trim()).get(); // legado (nome exato)
+  if(!snap.empty) return snap.docs;
+  const all = await db.collection("alunos").get();                                  // legado tolerante (varredura)
+  return all.docs.filter(d=> norm((d.data()||{}).nome)===alvo);
+}
 async function submitLoginAluno(){
   const nome=val('laNome').trim(), senha=val('laSenha');
   if(!nome||!senha){ State.authErro="Informe nome e senha."; render(); return; }
   State.authBusy=true; State.authErro=""; render();
   try{
-    const snap = await db.collection("alunos").where("nome","==",nome).get();
-    if(snap.empty) throw new Error("nao_encontrado");
+    const docs = await buscarAlunosPorNome(nome);
+    if(!docs.length) throw new Error("nao_encontrado");
     const h = await hashSenha(senha);
     let achou=null;
-    snap.forEach(d=>{ if(!achou && d.data().senha===h) achou={ id:d.id, data:d.data() }; });
+    docs.forEach(d=>{ if(!achou && d.data().senha===h) achou={ id:d.id, data:d.data() }; });
     if(!achou) throw new Error("senha");
+    // backfill do campo normalizado em contas antigas (acelera logins futuros)
+    if(!achou.data.nomeNorm){ try{ db.collection("alunos").doc(achou.id).set({ nomeNorm:norm(achou.data.nome||"") }, { merge:true }); }catch(_){} }
     const doc = Object.assign({}, achou.data, { id:achou.id }); delete doc.criadoEm;
     definirAlunoLogado(doc);
     SESSAO={ tipo:"aluno", id:achou.id }; salvarSessao();
@@ -1109,7 +1133,7 @@ function renderCadastroAluno(){
     <label>Turma</label>
     ${turmaSelectHtml('caTurma', Form.turma, true)}
     <label>Senha de acesso</label>
-    <input id="caSenha" type="password" value="${esc(Form.senha||'')}" placeholder="Crie uma senha" autocomplete="off">
+    ${inputSenha('caSenha','Crie uma senha', Form.senha)}
     ${authBusyBtn(`<button class="btn" onclick="App.submitCadastroAluno()">Cadastrar e entrar</button>`)}
     <button class="btn gray" style="margin-top:12px" onclick="App.irTela('loginAluno')">Já tenho conta</button>
   `, "landing");
@@ -1129,7 +1153,7 @@ async function submitCadastroAluno(){
   State.authBusy=true; State.authErro=""; render();
   try{
     const senhaHash = await hashSenha(senha);
-    const base = Object.assign(novaGamificacao(), { nome, idade, ano, nivel, turma, senha:senhaHash });
+    const base = Object.assign(novaGamificacao(), { nome, nomeNorm:norm(nome), idade, ano, nivel, turma, senha:senhaHash });
     const ref = await db.collection("alunos").add(Object.assign({}, base, { criadoEm: firebase.firestore.FieldValue.serverTimestamp() }));
     base.id = ref.id;
     definirAlunoLogado(base);
@@ -1146,7 +1170,7 @@ function renderLoginProf(){
     <label>E-mail</label>
     <input id="lpEmail" type="email" placeholder="seu@email.com" autocomplete="off">
     <label>Senha</label>
-    <input id="lpSenha" type="password" placeholder="Sua senha" autocomplete="off">
+    ${inputSenha('lpSenha','Sua senha')}
     ${authBusyBtn(`<button class="btn blue" onclick="App.submitLoginProf()">Entrar</button>`)}
     <button class="btn gray" style="margin-top:12px" onclick="App.irCadastroProf()">Ainda não tenho conta — Cadastrar</button>
   `, "landing");
@@ -1193,7 +1217,7 @@ function renderCadastroProf(){
     <label>E-mail</label>
     <input id="cpEmail" type="email" value="${esc(Form.email||'')}" placeholder="seu@email.com" autocomplete="off">
     <label>Senha</label>
-    <input id="cpSenha" type="password" value="${esc(Form.senha||'')}" placeholder="Crie uma senha" autocomplete="off">
+    ${inputSenha('cpSenha','Crie uma senha', Form.senha)}
     <label>Turmas que leciona</label>
     ${turmaChips}
     <label>Disciplinas que leciona</label>
@@ -1250,7 +1274,7 @@ function renderAdmin(){
       <p style="color:#777;font-size:14px;margin-bottom:14px">Área restrita para configurar a chave da IA (OpenAI).</p>
       ${authErroHtml()}
       <label>Senha de administrador</label>
-      <input id="admSenha" type="password" placeholder="Senha de admin" autocomplete="off">
+      ${inputSenha('admSenha','Senha de admin')}
       <button class="btn" onclick="App.submitAdminSenha()">Entrar</button>
     `, "landing");
     setTimeout(()=>{ const e=document.getElementById("admSenha"); if(e){ e.focus(); e.onkeydown=ev=>{ if(ev.key==="Enter") submitAdminSenha(); }; } },80);
@@ -1264,7 +1288,7 @@ function renderAdmin(){
       <p style="font-size:13px;color:#555;margin-bottom:8px">Modelo: <b>${IA_MODELO}</b> (OpenAI). A chave é salva no Firestore (<code>config/openai</code>, campo <code>apiKey</code>) e usada por todos os dispositivos.</p>
       <p style="font-size:12px;color:#c0392b;margin-bottom:10px">⚠️ A chave fica legível por quem acessar o Firestore. Não use uma chave sem limite de gastos.</p>
       <label>OpenAI API Key</label>
-      <input id="admKey" type="password" value="${esc(IA.apiKey||'')}" placeholder="sk-..." autocomplete="off">
+      ${inputSenha('admKey','sk-...', IA.apiKey)}
       <p style="font-size:12px;color:#1a73e8;margin:-4px 0 10px">🔑 Obtenha em <b>platform.openai.com</b> → API Keys. Status atual: ${temChave?'✅ configurada':'❌ não configurada'}.</p>
       ${authBusyBtn(`<button class="btn" onclick="App.salvarChaveOpenAI()">💾 Salvar chave no Firestore</button>`)}
     </div>
@@ -1568,7 +1592,7 @@ function startExercises(){
   // resolve em ordem crescente de dificuldade (fácil → intermediário → difícil)
   const ordenados = ordenarPorDificuldade(l.exercicios);
   Sess = { idx:0, vidas:3, acertos:0, erros:0, xpGanho:0, respondido:false, acertouAtual:false,
-           selecionado:null, respAluno:"", total:ordenados.length, exercicios:ordenados };
+           selecionado:null, respAluno:"", total:ordenados.length, exercicios:ordenados, revisao:[] };
   State.tela="exercise"; render();
 }
 
@@ -1627,6 +1651,10 @@ function renderExercise(){
       <div class="hearts">${hearts}</div>
     </div>
     <div class="content">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--gray-d);font-weight:700;margin-bottom:8px">
+        <span>Questão ${Sess.idx+1} de ${Sess.total}</span>
+        <span>✅ ${Sess.acertos} acerto${Sess.acertos===1?'':'s'}</span>
+      </div>
       <div style="margin-bottom:6px;display:flex;gap:6px;align-items:center">
         <span class="pill-tag" style="background:${s.cor}">${tipoLabel(ex.tipo)}</span>
         ${ex.nivel?`<span class="pill-tag" style="background:${nivelDificuldadeCor(ex.nivel)}">${nivelDificuldadeLabel(ex.nivel)} • +${xpDaQuestao(ex)} XP</span>`:''}
@@ -1663,6 +1691,12 @@ function checkAnswer(){
     ok = Sess.selecionado===ex.correta;
   }
   Sess.respondido=true; Sess.acertouAtual=ok;
+  // registra para a revisão ao final da lição
+  Sess.revisao.push({
+    enunciado: ex.enunciado, tipo: ex.tipo, nivel: ex.nivel,
+    correta: ex.tipo==="fill" ? (ex.resposta||"") : (ex.opcoes? ex.opcoes[ex.correta] : ""),
+    resp: Sess.respAluno, ok: ok
+  });
   if(ok){
     Sess.acertos++; Sess.xpGanho += xpDaQuestao(ex); Sound.correct(); renderExercise();
   } else {
@@ -1885,6 +1919,17 @@ function renderDone(){
         <div style="text-align:left"><b>${esc(p.nome||'Prêmio')}</b><div style="font-size:12px;color:#777">${esc(p.descricao||'')}</div></div>
       </div>`).join("")}
     </div>` : '';
+  // revisão: questões erradas (com a resposta certa) para o aluno repassar
+  const errosRev = (Sess.revisao||[]).filter(r=>!r.ok);
+  const revisaoHtml = errosRev.length ? `<details style="width:100%;margin-top:18px;text-align:left;background:#fff;border:2px solid var(--gray);border-radius:14px;padding:2px 14px">
+      <summary style="font-weight:800;cursor:pointer;padding:10px 0;color:var(--red)">📋 Revisar ${errosRev.length} ${errosRev.length===1?'erro':'erros'}</summary>
+      ${errosRev.map(r=>`<div style="padding:10px 0;border-top:1px solid var(--gray)">
+        <div style="font-weight:700;font-size:14px">${esc(r.enunciado)}</div>
+        <div style="font-size:13px;color:var(--red)">Sua resposta: ${esc(r.resp||'(em branco)')}</div>
+        <div style="font-size:13px;color:var(--green-d)">Resposta certa: <b>${esc(r.correta)}</b></div>
+      </div>`).join("")}
+    </details>` :
+    `<div class="pill-tag pop" style="background:var(--green);font-size:14px;padding:8px 16px;margin-top:14px">🎯 Gabarito perfeito!</div>`;
   app.innerHTML = `<div class="screen active">
     <div class="celebrate" id="celebrate">
       ${mascot('bounce')}
@@ -1897,6 +1942,7 @@ function renderDone(){
       ${r.subiuNivel? `<div class="pill-tag pop" style="background:var(--yellow);font-size:14px;padding:8px 16px">🎊 Subiu para o Nível ${r.nivel}!</div>`:''}
       ${medalhasHtml}
       ${premiosHtml}
+      ${revisaoHtml}
       <div style="width:100%;margin-top:28px">
         <button class="btn" onclick="App.openSubject('${s.id}')">Continuar</button>
         <button class="btn gray" style="margin-top:10px" onclick="App.goHome()">🏠 Início</button>
@@ -2021,7 +2067,7 @@ function resetProgress(){
 /* ============================================================
    E) UI DO PROFESSOR
    ============================================================ */
-const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, regenerando:false, iaErro:"", iaConfigAberta:false,
+const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, regenerando:false, previewing:false, iaErro:"", iaConfigAberta:false,
   // painel de rendimento (Fase C)
   prog:{ carregada:false, carregando:false, erro:"", alunos:[], progresso:[], fTurma:"", fDisc:"", fPeriodo:"todos" },
   // premiações personalizadas (Fase D)
@@ -2030,6 +2076,7 @@ const Teacher = { tab:"licoes", subj:"mat", editingLesson:null, gerando:false, r
   conta:{ turmas:[], disc:[], salvando:false } };
 
 function renderTeacher(){
+  if(Teacher.previewing){ renderPreview(); return; }
   let inner;
   if(Teacher.tab==="licoes") inner=teacherLessonsTab();
   else if(Teacher.tab==="novo") inner=teacherEditorTab();
@@ -2096,7 +2143,7 @@ function escopoLicaoLabel(l){
 }
 function teacherSelectSubj(v){ Teacher.subj=v; render(); }
 
-function resetIaEstado(){ Teacher.gerando=false; Teacher.regenerando=false; Teacher.iaErro=""; Teacher.iaConfigAberta=false; }
+function resetIaEstado(){ Teacher.gerando=false; Teacher.regenerando=false; Teacher.previewing=false; Teacher.iaErro=""; Teacher.iaConfigAberta=false; }
 function newLesson(){ Teacher.editingLesson={ id:null, titulo:"", texto:"", exercicios:[], turma:"", nivel:"", ano:"" }; resetIaEstado(); Teacher.tab="novo"; render(); }
 function editLesson(id){
   const l=(DATA[Teacher.subj]||[]).find(x=>x.id===id);
@@ -2156,8 +2203,53 @@ function teacherEditorTab(){
     <div id="exList">${exs}</div>
     <button class="btn blue small" style="width:100%;margin-bottom:8px" onclick="App.addExercise()">➕ Adicionar exercício</button>
 
-    <button class="btn" style="margin-top:8px" onclick="App.saveLesson()">💾 Salvar lição</button>
+    <button class="btn blue" style="margin-top:8px" onclick="App.previewLesson()">👁️ Pré-visualizar (como o aluno vê)</button>
+    <button class="btn" style="margin-top:10px" onclick="App.saveLesson()">💾 Salvar lição</button>
     <button class="btn gray" style="margin-top:10px" onclick="App.teacherTab('licoes')">Cancelar</button>`;
+}
+function previewLesson(){ syncTextInputs(); Teacher.previewing=true; render(); }
+function fecharPreview(){ Teacher.previewing=false; render(); }
+// Mostra a lição em edição como o aluno verá (material + exercícios com a resposta certa).
+function renderPreview(){
+  const L = Teacher.editingLesson || { titulo:"", texto:"", exercicios:[] };
+  const s = subjById(Teacher.subj);
+  const corpo = formatResumo(L.texto || "(sem conteúdo de estudo)");
+  const exs = (L.exercicios||[]).map((ex,i)=>{
+    let opc="";
+    if(ex.tipo==="fill"){
+      opc = `<div class="explic-resp" style="margin:8px 0 0">Resposta: <b>${esc(ex.resposta||'')}</b></div>`;
+    } else {
+      opc = (ex.opcoes||[]).map((o,j)=>{
+        const certo = j===ex.correta;
+        const letra = ex.tipo==="vf" ? (j===0?'V':'F') : String.fromCharCode(65+j);
+        return `<div class="opt ${certo?'correct':''}" style="cursor:default">
+          <span class="letter">${letra}</span><span>${esc(o)}</span>${certo?'<span style="margin-left:auto">✔️</span>':''}</div>`;
+      }).join("");
+    }
+    return `<div class="ex-edit-card">
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <span class="pill-tag" style="background:${s.cor}">${tipoLabel(ex.tipo)}</span>
+        ${ex.nivel?`<span class="pill-tag" style="background:${nivelDificuldadeCor(ex.nivel)}">${nivelDificuldadeLabel(ex.nivel)}</span>`:''}
+      </div>
+      <div style="font-weight:700;margin-bottom:4px">${i+1}. ${esc(ex.enunciado||'(sem enunciado)')}</div>
+      ${opc}
+    </div>`;
+  }).join("") || `<p style="color:var(--gray-d);text-align:center;padding:10px">Nenhum exercício cadastrado.</p>`;
+  app.innerHTML = `<div class="screen active">
+    <div class="topbar" style="background:${s.cor};color:#fff">
+      <button class="back-btn" style="color:#fff" onclick="App.fecharPreview()">←</button>
+      <h2>👁️ Pré-visualização</h2>
+    </div>
+    <div class="content" style="background:#f7fbff">
+      <span class="pill-tag" style="background:#9b59b6">${esc(escopoLicaoLabel(L))}</span>
+      <h1 style="font-size:22px;color:${s.cor};margin:8px 0">${esc(L.titulo||'(sem título)')}</h1>
+      <div class="sec-title">Material de estudo</div>
+      <div class="resumo-box">${corpo}</div>
+      <div class="sec-title">Exercícios (${(L.exercicios||[]).length}) — resposta correta destacada</div>
+      ${exs}
+      <button class="btn" style="margin-top:10px" onclick="App.fecharPreview()">← Voltar ao editor</button>
+    </div>
+  </div>`;
 }
 
 // ---- PAINEL DE GERAÇÃO POR IA (OpenAI / gpt-4o-mini; chave compartilhada via Admin) ----
@@ -2847,7 +2939,7 @@ window.App = {
   checkAnswer, nextExercise, continuarAposExplicacao, confirmQuit, openProfile, resetProgress, toggleSound,
   onPerfilNivel, salvarDadosEscolares,
   // autenticação
-  irTela, logout,
+  irTela, logout, toggleSenha,
   irCadastroAluno, submitLoginAluno, onNivelCadAluno, submitCadastroAluno,
   irCadastroProf, submitLoginProf, toggleDiscCad, toggleTurmaCad, submitCadastroProf,
   submitAdminSenha, salvarChaveOpenAI,
@@ -2855,6 +2947,7 @@ window.App = {
   teacherTab, teacherSelectSubj, onLessonNivel,
   newLesson, editLesson, deleteLesson, addExercise, removeExercise, setExType,
   setExEnun, setExResp, setExNivel, setOpt, setCorrect, addOpt, removeOpt, saveLesson,
+  previewLesson, fecharPreview,
   // rendimento (Fase C)
   recarregarRendimento, setProgTurma, setProgDisc, setProgPeriodo,
   // premiações (Fase D)
