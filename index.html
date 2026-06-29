@@ -1339,9 +1339,21 @@ function renderAdmin(){
       ${inputSenha('admKey','sk-...', IA.apiKey)}
       <p style="font-size:12px;color:#1a73e8;margin:-4px 0 10px">🔑 Obtenha em <b>platform.openai.com</b> → API Keys. Status atual: ${temChave?'✅ configurada':'❌ não configurada'}.</p>
       ${authBusyBtn(`<button class="btn" onclick="App.salvarChaveOpenAI()">💾 Salvar chave no Firestore</button>`)}
+      ${State.authBusy?'':`<button class="btn gray small" style="width:100%;margin-top:8px" onclick="App.testarChaveIA()">🔌 Testar conexão com a IA</button>`}
     </div>
     <button class="btn gray" style="margin-top:12px" onclick="App.irTela('landing')">Voltar</button>
   `, "landing");
+}
+// Testa a chave/conexão fazendo uma chamada mínima à OpenAI.
+async function testarChaveIA(){
+  const k = val('admKey').trim();
+  if(k) IA.apiKey = k; // usa o que está no campo (em memória), mesmo sem salvar
+  if(!IA.apiKey.trim()){ State.authErro="Cole a chave antes de testar."; render(); return; }
+  State.authBusy=true; State.authErro=""; render();
+  try{
+    await chamarIA("Responda apenas: ok", 15000);
+    State.authBusy=false; toast("✅ Conexão OK — a IA respondeu!"); render();
+  }catch(e){ State.authBusy=false; State.authErro = mensagemErroIA(e); render(); }
 }
 function submitAdminSenha(){
   if(val('admSenha')===ADMIN_PASSWORD){ State.adminAuth=true; State.authErro=""; }
@@ -2381,10 +2393,8 @@ Conteúdo da lição: ${conteudo}`;
     toast("Resumo regenerado e salvo no cache! ✅");
   }catch(err){
     Teacher.regenerando=false;
-    let msg=err&&err.message?err.message:"Falha ao contatar a IA.";
-    if(msg==="timeout") msg="A IA demorou demais para responder. Tente novamente.";
-    else if(/Failed to fetch|NetworkError/i.test(msg)) msg="Não foi possível conectar. Verifique a internet e a chave.";
-    Teacher.iaErro=msg; render();
+    Teacher.iaErro = mensagemErroIA(err);
+    render();
   }
 }
 
@@ -2426,6 +2436,17 @@ async function chamarIA(prompt, timeoutMs){
   const data = await resp.json();
   return data.choices && data.choices[0] && data.choices[0].message
     ? (data.choices[0].message.content || "") : "";
+}
+
+// Mensagem de erro amigável e precisa para falhas da IA (uso nos painéis do professor/admin).
+// Obs.: a OpenAI NÃO envia CORS nas respostas de erro (401/429), então o navegador bloqueia
+// e o fetch vira "Failed to fetch" — por isso chave inválida/sem créditos parece "erro de rede".
+function mensagemErroIA(err){
+  let msg = (err && err.message) ? err.message : "Falha ao contatar a IA.";
+  if(msg==="timeout") return "A IA demorou demais para responder. Tente novamente.";
+  if(/Failed to fetch|NetworkError|Load failed/i.test(msg))
+    return "Falha na chamada à OpenAI. Verifique, nesta ordem: (1) a chave é válida e a conta tem créditos/billing ativo; (2) a rede/firewall não bloqueia api.openai.com (redes corporativas costumam bloquear); (3) sua internet.";
+  return msg;
 }
 
 // Monta o prompt e chama a IA para gerar exercícios (painel do professor)
@@ -2472,10 +2493,7 @@ Conteúdo da lição: ${conteudo}`;
     toast(`✨ ${novos.length} exercícios (${cont.facil}F/${cont.intermediario}I/${cont.dificil}D)! Revise e salve.`);
   }catch(err){
     Teacher.gerando=false;
-    let msg = err && err.message ? err.message : "Falha ao contatar a IA.";
-    if(msg==="timeout") msg = "A IA demorou demais para responder. Tente novamente.";
-    else if(/Failed to fetch|NetworkError/i.test(msg)) msg = "Não foi possível conectar. Verifique sua internet e a chave da API.";
-    Teacher.iaErro = msg;
+    Teacher.iaErro = mensagemErroIA(err);
     render();
   }
 }
@@ -3028,7 +3046,7 @@ window.App = {
   irTela, logout, toggleSenha,
   irCadastroAluno, submitLoginAluno, onNivelCadAluno, submitCadastroAluno,
   irCadastroProf, submitLoginProf, toggleDiscCad, toggleTurmaCad, submitCadastroProf,
-  submitAdminSenha, salvarChaveOpenAI,
+  submitAdminSenha, salvarChaveOpenAI, testarChaveIA,
   // professor
   teacherTab, teacherSelectSubj, onLessonNivel,
   newLesson, editLesson, deleteLesson, addExercise, removeExercise, setExType,
